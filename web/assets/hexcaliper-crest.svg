@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 120" fill="none">
+  <!-- Shield body -->
+  <path d="M50 5 L92 22 L92 65 Q92 95 50 115 Q8 95 8 65 L8 22 Z"
+        fill="#0e0a20" stroke="#b45fff" stroke-width="3"/>
+  <!-- Inner shield border -->
+  <path d="M50 14 L84 28 L84 64 Q84 89 50 106 Q16 89 16 64 L16 28 Z"
+        fill="none" stroke="#b45fff" stroke-width="1.5" opacity="0.6"/>
+  <!-- Knight helm - visor -->
+  <rect x="34" y="38" width="32" height="22" rx="4"
+        fill="none" stroke="#b45fff" stroke-width="2"/>
+  <!-- Helm top -->
+  <path d="M34 38 Q34 28 50 26 Q66 28 66 38"
+        fill="none" stroke="#b45fff" stroke-width="2"/>
+  <!-- Visor slits -->
+  <line x1="38" y1="48" x2="48" y2="48" stroke="#b45fff" stroke-width="1.5"/>
+  <line x1="52" y1="48" x2="62" y2="48" stroke="#b45fff" stroke-width="1.5"/>
+  <line x1="38" y1="53" x2="62" y2="53" stroke="#b45fff" stroke-width="1.5"/>
+  <!-- Plume feathers -->
+  <path d="M44 26 Q40 14 36 10" stroke="#d09fff" stroke-width="1.5" fill="none" opacity="0.8"/>
+  <path d="M50 26 Q50 12 50 8"  stroke="#d09fff" stroke-width="2"   fill="none"/>
+  <path d="M56 26 Q60 14 64 10" stroke="#d09fff" stroke-width="1.5" fill="none" opacity="0.8"/>
+  <!-- Gorget (neck) -->
+  <rect x="38" y="60" width="24" height="8" rx="2"
+        fill="none" stroke="#b45fff" stroke-width="1.5"/>
+  <!-- Caliper arms (bottom of shield) -->
+  <line x1="30" y1="82" x2="50" y2="72" stroke="#b45fff" stroke-width="2" stroke-linecap="round"/>
+  <line x1="70" y1="82" x2="50" y2="72" stroke="#b45fff" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="30" cy="83" r="3" fill="#b45fff"/>
+  <circle cx="70" cy="83" r="3" fill="#b45fff"/>
+</svg>

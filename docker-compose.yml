@@ -1,0 +1,30 @@
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./web:/usr/share/nginx/html:ro
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  api:
+    build: ./api
+    expose:
+      - "8000"
+    environment:
+      OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+      LD_LIBRARY_PATH: "/usr/local/lib"
+      DEFAULT_MODEL: "llama3:8b"
+      MAX_INPUT_CHARS: "20000"
+      REQUEST_TIMEOUT_SECONDS: "120"
+    volumes:
+      - ./data:/app/data
+    devices:
+      - /dev/nvidiactl:/dev/nvidiactl
+      - /dev/nvidia0:/dev/nvidia0
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

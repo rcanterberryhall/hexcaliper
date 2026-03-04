@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hexcaliper — AI Chat</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/hexcaliper-crest.svg" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+
+  <div id="app">
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <button id="new-chat-btn">+ New Chat</button>
+      </div>
+      <div id="conv-list" role="list"></div>
+
+      <div class="sidebar-divider"></div>
+
+      <div class="sidebar-section-header">
+        <span>Documents</span>
+        <label id="upload-label" title="Upload document (.pdf, .docx, .txt, .md)">
+          +
+          <input type="file" id="doc-upload" accept=".pdf,.docx,.txt,.md" hidden />
+        </label>
+      </div>
+      <div id="doc-list" role="list"></div>
+    </aside>
+
+    <div id="main">
+      <header>
+        <button id="sidebar-toggle" aria-label="Toggle sidebar">&#9776;</button>
+        <img src="/assets/hexcaliper-crest.svg" alt="Hexcaliper crest" />
+        <div class="brand">
+          <h1>Hexcaliper</h1>
+          <p>AI Workbench</p>
+        </div>
+        <div id="gpu-meter" title="">
+          <div class="gpu-meter-row">
+            <span class="gpu-meter-label">GPU</span>
+            <span id="gpu-pct">--</span>
+          </div>
+          <div class="gpu-bar-wrap">
+            <div id="gpu-util-bar" class="gpu-bar"></div>
+          </div>
+          <div class="gpu-meter-row">
+            <span id="gpu-vram">-- VRAM</span>
+          </div>
+        </div>
+        <div class="model-wrap">
+          <label for="model-select">Model</label>
+          <select id="model-select">
+            <option value="">Loading…</option>
+          </select>
+        </div>
+      </header>
+
+      <div id="chat" role="log" aria-live="polite" aria-label="Chat conversation"></div>
+
+      <form id="composer" autocomplete="off">
+        <textarea
+          id="input"
+          rows="1"
+          placeholder="Ask anything…"
+          aria-label="Message input"
+        ></textarea>
+        <button type="submit" id="send-btn">Send</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

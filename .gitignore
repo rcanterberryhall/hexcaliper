@@ -1,0 +1,15 @@
+# Runtime data
+data/chroma/
+data/db.json
+
+# NVIDIA binary (machine-specific, copy before build)
+api/libnvidia-ml.so.1
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Docker
+*.log
