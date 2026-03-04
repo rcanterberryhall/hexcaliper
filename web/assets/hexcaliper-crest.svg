@@ -1,30 +1,47 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 120" fill="none">
   <!-- Shield body -->
   <path d="M50 5 L92 22 L92 65 Q92 95 50 115 Q8 95 8 65 L8 22 Z"
-        fill="#0e0a20" stroke="#b45fff" stroke-width="3"/>
+        fill="#0e0a20" stroke="#d4a017" stroke-width="3"/>
   <!-- Inner shield border -->
   <path d="M50 14 L84 28 L84 64 Q84 89 50 106 Q16 89 16 64 L16 28 Z"
-        fill="none" stroke="#b45fff" stroke-width="1.5" opacity="0.6"/>
+        fill="none" stroke="#9b5de5" stroke-width="1.5" opacity="0.6"/>
+
+  <!-- Excalibur sword — rendered behind helm, gold -->
+  <!-- Blade: tip rises where center plume was -->
+  <polygon points="50,9 51.8,68 48.2,68" fill="#d4a017"/>
+  <!-- Fuller (center groove for depth) -->
+  <line x1="50" y1="12" x2="50" y2="58" stroke="#a67c00" stroke-width="0.8" opacity="0.75"/>
+  <!-- Crossguard (curved quillon) -->
+  <path d="M33,68 Q50,65 67,68 L67,72 Q50,69 33,72 Z" fill="#d4a017"/>
+  <!-- Grip -->
+  <rect x="47.5" y="72" width="5" height="11" rx="1.5" fill="#5c3400"/>
+  <!-- Grip wrapping -->
+  <line x1="47.5" y1="74.5" x2="52.5" y2="74.5" stroke="#d4a017" stroke-width="0.7"/>
+  <line x1="47.5" y1="77"   x2="52.5" y2="77"   stroke="#d4a017" stroke-width="0.7"/>
+  <line x1="47.5" y1="79.5" x2="52.5" y2="79.5" stroke="#d4a017" stroke-width="0.7"/>
+  <!-- Pommel -->
+  <circle cx="50" cy="86" r="4.5" fill="#d4a017"/>
+  <circle cx="50" cy="86" r="2.8" fill="#a67c00"/>
+
   <!-- Knight helm - visor -->
   <rect x="34" y="38" width="32" height="22" rx="4"
-        fill="none" stroke="#b45fff" stroke-width="2"/>
+        fill="none" stroke="#9b5de5" stroke-width="2"/>
   <!-- Helm top -->
   <path d="M34 38 Q34 28 50 26 Q66 28 66 38"
-        fill="none" stroke="#b45fff" stroke-width="2"/>
+        fill="none" stroke="#9b5de5" stroke-width="2"/>
   <!-- Visor slits -->
-  <line x1="38" y1="48" x2="48" y2="48" stroke="#b45fff" stroke-width="1.5"/>
-  <line x1="52" y1="48" x2="62" y2="48" stroke="#b45fff" stroke-width="1.5"/>
-  <line x1="38" y1="53" x2="62" y2="53" stroke="#b45fff" stroke-width="1.5"/>
-  <!-- Plume feathers -->
-  <path d="M44 26 Q40 14 36 10" stroke="#d09fff" stroke-width="1.5" fill="none" opacity="0.8"/>
-  <path d="M50 26 Q50 12 50 8"  stroke="#d09fff" stroke-width="2"   fill="none"/>
-  <path d="M56 26 Q60 14 64 10" stroke="#d09fff" stroke-width="1.5" fill="none" opacity="0.8"/>
+  <line x1="38" y1="48" x2="48" y2="48" stroke="#9b5de5" stroke-width="1.5"/>
+  <line x1="52" y1="48" x2="62" y2="48" stroke="#9b5de5" stroke-width="1.5"/>
+  <line x1="38" y1="53" x2="62" y2="53" stroke="#9b5de5" stroke-width="1.5"/>
+  <!-- Flanking plumes (center plume replaced by sword blade) -->
+  <path d="M44 26 Q40 14 36 10" stroke="#c49fff" stroke-width="1.5" fill="none" opacity="0.8"/>
+  <path d="M56 26 Q60 14 64 10" stroke="#c49fff" stroke-width="1.5" fill="none" opacity="0.8"/>
   <!-- Gorget (neck) -->
   <rect x="38" y="60" width="24" height="8" rx="2"
-        fill="none" stroke="#b45fff" stroke-width="1.5"/>
+        fill="none" stroke="#9b5de5" stroke-width="1.5"/>
   <!-- Caliper arms (bottom of shield) -->
-  <line x1="30" y1="82" x2="50" y2="72" stroke="#b45fff" stroke-width="2" stroke-linecap="round"/>
-  <line x1="70" y1="82" x2="50" y2="72" stroke="#b45fff" stroke-width="2" stroke-linecap="round"/>
-  <circle cx="30" cy="83" r="3" fill="#b45fff"/>
-  <circle cx="70" cy="83" r="3" fill="#b45fff"/>
+  <line x1="28" y1="95" x2="50" y2="83" stroke="#9b5de5" stroke-width="2" stroke-linecap="round"/>
+  <line x1="72" y1="95" x2="50" y2="83" stroke="#9b5de5" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="28" cy="96" r="3" fill="#9b5de5"/>
+  <circle cx="72" cy="96" r="3" fill="#9b5de5"/>
 </svg>
