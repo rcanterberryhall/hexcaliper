@@ -7,6 +7,7 @@ A self-hosted chat interface for local LLMs via [Ollama](https://ollama.com), wi
 - **Multi-model chat** — switch between any model pulled into your local Ollama instance
 - **Persistent conversations** — history stored in a lightweight TinyDB JSON file
 - **Document RAG** — upload PDF, DOCX, TXT, or Markdown files; relevant chunks are retrieved and injected into context automatically
+- **Scoped documents** — documents can be global (available in every chat) or scoped to a single conversation (visible only in that chat, deleted when the conversation is deleted)
 - **Autonomous web search** — models that support tool calling (e.g. Qwen3, Qwen2.5, Mistral) automatically search DuckDuckGo when the question requires current information; a live "Searching the web…" indicator shows while results are fetched
 - **URL fetching** — paste a URL in your message and the page content is fetched and included as context
 - **Streaming responses** — tokens stream to the browser via Server-Sent Events
@@ -187,6 +188,16 @@ Running on Windows is possible in theory via WSL2 and Docker Desktop:
    If you do not need GPU monitoring, remove the `devices` block from `docker-compose.yml` entirely and skip the `libnvidia-ml.so.1` copy step.
 
 5. **Clone and run inside WSL2** — open your WSL2 terminal and follow the standard [Quickstart](#quickstart-ubuntu-24044-lts--tested) from there. Do not run `docker compose` from a Windows Command Prompt or PowerShell, as path handling differs.
+
+## Documents
+
+### Global documents
+
+Uploaded from the **Global Documents** section in the sidebar. These are injected into every conversation for that user whenever a relevant chunk is found.
+
+### Chat-scoped documents
+
+Uploaded from the **Chat Documents** section that appears in the sidebar once a conversation is active. These are only retrieved in that specific conversation — they are invisible to all other chats and are automatically deleted (including their vector embeddings) when the conversation is deleted. Use this to keep context tight for local models.
 
 ## Web search
 
