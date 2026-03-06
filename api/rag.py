@@ -81,10 +81,11 @@ async def search(
     query: str,
     top_k: int = TOP_K,
     conversation_id: str | None = None,
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
+    """Return (text_chunks, doc_ids) for chunks passing the distance threshold."""
     col = get_collection()
     if col.count() == 0:
-        return []
+        return [], []
     query_emb = await embed(query)
 
     if conversation_id:
@@ -110,16 +111,22 @@ async def search(
             query_embeddings=[query_emb],
             n_results=top_k,
             where=where,
-            include=["documents", "distances"],
+            include=["documents", "distances", "metadatas"],
         )
         if not results["documents"]:
-            return []
-        return [
-            doc for doc, dist in zip(results["documents"][0], results["distances"][0])
-            if dist < DISTANCE_THRESHOLD
-        ]
+            return [], []
+        chunks, doc_ids = [], []
+        for doc, dist, meta in zip(
+            results["documents"][0],
+            results["distances"][0],
+            results["metadatas"][0],
+        ):
+            if dist < DISTANCE_THRESHOLD:
+                chunks.append(doc)
+                doc_ids.append(meta.get("doc_id", ""))
+        return chunks, doc_ids
     except Exception:
-        return []
+        return [], []
 
 
 def delete_chunks(doc_id: str) -> None:

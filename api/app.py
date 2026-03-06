@@ -9,6 +9,7 @@ from typing import Optional
 import httpx
 import pypdf
 import docx as python_docx
+import copyright_extract
 import rag
 import web_fetch
 import web_search
@@ -299,6 +300,7 @@ async def upload_document(
     scope = f"conversation:{conversation_id}" if conversation_id else "global"
     doc_id = str(uuid.uuid4())
     chunk_count = await rag.ingest(doc_id, user_email, text, scope=scope)
+    notices = copyright_extract.extract(text)
 
     ts = now_iso()
     meta = {
@@ -309,6 +311,7 @@ async def upload_document(
         "chunk_count": chunk_count,
         "created_at": ts,
         "scope": scope,
+        "copyright_notices": notices,
     }
     with db_lock:
         documents_table.insert(meta)
@@ -375,9 +378,19 @@ async def chat(req: ChatRequest, request: Request):
         url_context = {}
 
     try:
-        doc_chunks = await rag.search(user_email, req.message, conversation_id=conv_id)
+        doc_chunks, doc_ids = await rag.search(user_email, req.message, conversation_id=conv_id)
     except Exception:
-        doc_chunks = []
+        doc_chunks, doc_ids = [], []
+
+    # Collect copyright notices from the matched documents
+    doc_copyright_notices: list[str] = []
+    if doc_ids:
+        _DocQ = Query()
+        with db_lock:
+            for _did in dict.fromkeys(doc_ids):  # unique, order-preserving
+                _rows = documents_table.search(_DocQ.id == _did)
+                if _rows:
+                    doc_copyright_notices.extend(_rows[0].get("copyright_notices") or [])
 
     # Build Ollama message list
     messages = []
@@ -386,12 +399,23 @@ async def chat(req: ChatRequest, request: Request):
 
     context_parts = []
     if doc_chunks:
+        if doc_copyright_notices:
+            unique_notices = list(dict.fromkeys(doc_copyright_notices))
+            notice_block = (
+                "Copyright notices detected in the source documents:\n"
+                + "\n".join(f"  • {n}" for n in unique_notices)
+                + "\n\nThe user is responsible for compliance with these terms. "
+                "Prefer summaries, citations, and analysis over verbatim reproduction."
+            )
+        else:
+            notice_block = (
+                "Note: These documents may be copyrighted. "
+                "The user is responsible for compliance with applicable licenses. "
+                "Prefer summaries, citations, and analysis over verbatim reproduction."
+            )
         context_parts.append(
-            "Note: The following document excerpts may contain copyrighted material. "
-            "The user is responsible for ensuring their use complies with applicable "
-            "licenses and copyright law. Do not reproduce large verbatim sections; "
-            "prefer summaries, citations, and analysis.\n\n"
-            "Relevant information from the user's documents:\n\n"
+            notice_block
+            + "\n\nRelevant information from the user's documents:\n\n"
             + "\n\n---\n\n".join(doc_chunks)
         )
     for url, content in url_context.items():
