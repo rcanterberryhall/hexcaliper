@@ -387,6 +387,10 @@ async def chat(req: ChatRequest, request: Request):
     context_parts = []
     if doc_chunks:
         context_parts.append(
+            "Note: The following document excerpts may contain copyrighted material. "
+            "The user is responsible for ensuring their use complies with applicable "
+            "licenses and copyright law. Do not reproduce large verbatim sections; "
+            "prefer summaries, citations, and analysis.\n\n"
             "Relevant information from the user's documents:\n\n"
             + "\n\n---\n\n".join(doc_chunks)
         )

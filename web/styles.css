@@ -520,6 +520,15 @@ body { display: block; }
   opacity: 0.8;
 }
 
+/* ── Copyright notice ───────────────────────────────────────── */
+.copyright-notice {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  opacity: 0.6;
+  margin: 6px 8px 0;
+  line-height: 1.4;
+}
+
 /* ── Live search indicator ──────────────────────────────────── */
 .search-badge {
   font-size: 0.72rem;
