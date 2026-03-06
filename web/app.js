@@ -19,6 +19,13 @@ const gpuMeter      = document.getElementById('gpu-meter');
 const gpuPct        = document.getElementById('gpu-pct');
 const gpuUtilBar    = document.getElementById('gpu-util-bar');
 const gpuVram       = document.getElementById('gpu-vram');
+const modelDot        = document.getElementById('model-dot');
+const modelDotLabel   = document.getElementById('model-dot-label');
+const loadModelBtn    = document.getElementById('load-model-btn');
+const refreshModelsBtn = document.getElementById('refresh-models-btn');
+const errorBar      = document.getElementById('error-bar');
+const errorBarText  = document.getElementById('error-bar-text');
+const errorBarDismiss = document.getElementById('error-bar-dismiss');
 
 let currentConvId = null;
 let abortController = null;
@@ -401,6 +408,7 @@ form.addEventListener('submit', async (e) => {
   const message = input.value.trim();
   if (!message) return;
 
+  clearErrorBar();
   const model = modelSel.value;
   input.value = '';
   input.style.height = 'auto';
@@ -466,10 +474,13 @@ form.addEventListener('submit', async (e) => {
           if (searchBadge) { searchBadge.remove(); searchBadge = null; }
           onToken(evt.content);
           scrollToBottom();
+        } else if (evt.type === 'warning') {
+          showErrorBar(evt.detail, 'warning');
         } else if (evt.type === 'error') {
           bubble.classList.remove('streaming');
           bubble.classList.add('error');
           bubble.textContent = `Error: ${evt.detail}`;
+          showErrorBar(evt.detail);
           break outer;
         } else if (evt.type === 'done') {
           doneData = evt;
@@ -494,7 +505,9 @@ form.addEventListener('submit', async (e) => {
   } catch (err) {
     removeThinking();
     if (err.name !== 'AbortError') {
-      createMessage('ai', `Network error: ${err.message}`, { isError: true });
+      const msg = `Network error: ${err.message}`;
+      createMessage('ai', msg, { isError: true });
+      showErrorBar(msg);
     }
   } finally {
     abortController = null;
@@ -526,6 +539,39 @@ async function pollGpu() {
   }
 }
 
+// ── Error bar ─────────────────────────────────────────────────
+function showErrorBar(msg, level = 'error') {
+  errorBarText.textContent = msg;
+  errorBar.dataset.level = level;
+  errorBar.hidden = false;
+}
+
+
+function clearErrorBar() {
+  errorBar.hidden = true;
+  errorBarText.textContent = '';
+}
+
+errorBarDismiss.addEventListener('click', clearErrorBar);
+
+// ── Model status dot ──────────────────────────────────────────
+async function pollModelStatus() {
+  const model = modelSel.value;
+  if (!model) return;
+  try {
+    const res = await fetch(`/api/model-status?model=${encodeURIComponent(model)}`);
+    if (!res.ok) return;
+    const { loaded } = await res.json();
+    modelDot.className = 'model-dot ' + (loaded ? 'loaded' : 'unloaded');
+    modelDotLabel.textContent = loaded ? 'Ready' : 'Not loaded';
+    modelDotLabel.className = 'model-dot-label ' + (loaded ? 'loaded' : 'unloaded');
+  } catch (_) {
+    modelDot.className = 'model-dot';
+    modelDotLabel.textContent = 'Unknown';
+    modelDotLabel.className = 'model-dot-label';
+  }
+}
+
 // ── Model list ───────────────────────────────────────────────
 async function fetchModels() {
   try {
@@ -546,12 +592,51 @@ async function fetchModels() {
 
 modelSel.addEventListener('change', () => {
   localStorage.setItem('selectedModel', modelSel.value);
+  pollModelStatus();
+});
+
+loadModelBtn.addEventListener('click', async () => {
+  const model = modelSel.value;
+  if (!model) return;
+  loadModelBtn.disabled = true;
+  modelDotLabel.textContent = 'Loading…';
+  modelDotLabel.className = 'model-dot-label';
+  modelDot.className = 'model-dot unloaded';
+  try {
+    const res = await fetch('/api/warm-model', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      showErrorBar(err.detail || 'Failed to load model');
+    }
+  } catch (err) {
+    showErrorBar(`Load error: ${err.message}`);
+  } finally {
+    loadModelBtn.disabled = false;
+    await pollModelStatus();
+  }
+});
+
+refreshModelsBtn.addEventListener('click', async () => {
+  refreshModelsBtn.disabled = true;
+  refreshModelsBtn.textContent = '…';
+  try {
+    await fetchModels();
+    await pollModelStatus();
+  } finally {
+    refreshModelsBtn.disabled = false;
+    refreshModelsBtn.textContent = '↻';
+  }
 });
 
 // ── Bootstrap ─────────────────────────────────────────────────
-fetchModels();
+fetchModels().then(pollModelStatus);
 fetchConversations();
 fetchDocuments();
 pollGpu();
 setInterval(pollGpu, 3000);
+setInterval(pollModelStatus, 5000);
 input.focus();

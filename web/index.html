@@ -22,7 +22,7 @@
         <span>Global Documents</span>
         <label id="upload-label" title="Upload document (.pdf, .docx, .txt, .md)">
           +
-          <input type="file" id="doc-upload" accept=".pdf,.docx,.txt,.md" hidden />
+          <input type="file" id="doc-upload" accept=".pdf,.docx,.xlsx,.txt,.md" hidden />
         </label>
       </div>
       <div id="doc-list" role="list"></div>
@@ -33,7 +33,7 @@
         <span>Chat Documents</span>
         <label id="chat-upload-label" title="Upload document for this chat only">
           +
-          <input type="file" id="chat-doc-upload" accept=".pdf,.docx,.txt,.md" hidden />
+          <input type="file" id="chat-doc-upload" accept=".pdf,.docx,.xlsx,.txt,.md" hidden />
         </label>
       </div>
       <div id="chat-doc-list" role="list" hidden></div>
@@ -61,11 +61,19 @@
         </div>
         <div class="model-wrap">
           <label for="model-select">Model</label>
+          <span id="model-dot" class="model-dot"></span>
+          <span id="model-dot-label" class="model-dot-label">Checking…</span>
           <select id="model-select">
             <option value="">Loading…</option>
           </select>
+          <button id="load-model-btn" class="icon-btn" title="Load model into VRAM">Load</button>
+          <button id="refresh-models-btn" class="icon-btn" title="Refresh model list / restart Ollama">↻</button>
         </div>
       </header>
+      <div id="error-bar" hidden role="alert">
+        <span id="error-bar-text"></span>
+        <button id="error-bar-dismiss" aria-label="Dismiss">✕</button>
+      </div>
 
       <div id="chat" role="log" aria-live="polite" aria-label="Chat conversation"></div>
 

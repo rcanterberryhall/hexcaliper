@@ -616,6 +616,97 @@ body { display: block; }
   color: var(--text-muted);
 }
 
+/* ── Model status dot ───────────────────────────────────────── */
+.model-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+  transition: background 0.4s ease, box-shadow 0.4s ease;
+}
+
+.model-dot.loaded {
+  background: #22c55e;
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.6);
+}
+
+.model-dot.unloaded {
+  background: #f59e0b;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.5);
+  animation: dot-pulse 1.8s ease-in-out infinite;
+}
+
+.model-dot-label {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.icon-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: 5px;
+  padding: 3px 7px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  line-height: 1;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.icon-btn:hover  { color: var(--gold); border-color: var(--gold); }
+.icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.model-dot-label.loaded  { color: #22c55e; }
+.model-dot-label.unloaded { color: #f59e0b; }
+
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
+/* ── Error bar ──────────────────────────────────────────────── */
+#error-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 18px;
+  background: rgba(239, 68, 68, 0.15);
+  border-bottom: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+  font-size: 0.82rem;
+  flex-shrink: 0;
+}
+
+#error-bar[data-level="warning"] {
+  background: rgba(245, 158, 11, 0.12);
+  border-bottom-color: rgba(245, 158, 11, 0.35);
+  color: #fcd34d;
+}
+
+#error-bar[data-level="warning"] #error-bar-dismiss {
+  color: #fcd34d;
+}
+
+#error-bar[hidden] { display: none; }
+
+#error-bar-text { flex: 1; }
+
+#error-bar-dismiss {
+  background: none;
+  border: none;
+  color: #fca5a5;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0 4px;
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+#error-bar-dismiss:hover { opacity: 1; }
+
 @media (max-width: 600px) {
   #gpu-meter { display: none; }
 }

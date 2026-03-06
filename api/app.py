@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 import os
@@ -9,6 +10,7 @@ from typing import Optional
 import httpx
 import pypdf
 import docx as python_docx
+import openpyxl
 import copyright_extract
 import rag
 import web_fetch
@@ -58,6 +60,31 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+async def summarize_document(text: str) -> str:
+    """Generate a short summary of document text using the default model."""
+    sample = text[:6000]
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{OLLAMA_BASE_URL}/api/chat",
+                json={
+                    "model": DEFAULT_MODEL,
+                    "stream": False,
+                    "messages": [{
+                        "role": "user",
+                        "content": (
+                            "Summarize this document in 2-3 sentences, "
+                            "focusing on its main topic and purpose:\n\n" + sample
+                        ),
+                    }],
+                },
+            )
+        resp.raise_for_status()
+        return resp.json()["message"]["content"].strip()
+    except Exception:
+        return ""
+
+
 def parse_file(filename: str, data: bytes) -> str:
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if ext == "pdf":
@@ -66,6 +93,16 @@ def parse_file(filename: str, data: bytes) -> str:
     if ext == "docx":
         doc = python_docx.Document(io.BytesIO(data))
         return "\n".join(p.text for p in doc.paragraphs if p.text.strip()).strip()
+    if ext in ("xlsx", "xls"):
+        wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        lines = []
+        for sheet in wb.worksheets:
+            lines.append(f"[Sheet: {sheet.title}]")
+            for row in sheet.iter_rows(values_only=True):
+                cells = [str(c) if c is not None else "" for c in row]
+                if any(cells):
+                    lines.append("\t".join(cells))
+        return "\n".join(lines).strip()
     return data.decode("utf-8", errors="replace").strip()
 
 
@@ -106,9 +143,11 @@ WEB_SEARCH_TOOL = {
     "function": {
         "name": "web_search",
         "description": (
-            "Search the web for current information, recent events, news, prices, "
-            "or anything that may not be in the model's training data. "
-            "Use this whenever the user's question likely requires up-to-date facts."
+            "Search the web for current information, recent events, news, or prices "
+            "that are not in the model's training data. "
+            "Use this ONLY when the answer cannot be found in the conversation, "
+            "the user's uploaded documents, or the model's existing knowledge. "
+            "Do NOT use this for questions about documents the user has already uploaded."
         ),
         "parameters": {
             "type": "object",
@@ -149,6 +188,39 @@ def _gpu_stats() -> dict:
 @app.get("/gpu")
 async def gpu():
     return _gpu_stats()
+
+
+@app.get("/model-status")
+async def model_status(model: str = ""):
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{OLLAMA_BASE_URL}/api/ps")
+        resp.raise_for_status()
+        running = resp.json().get("models", [])
+        loaded = any(m.get("name") == model or m.get("model") == model for m in running)
+        return {"model": model, "loaded": loaded}
+    except Exception:
+        return {"model": model, "loaded": False}
+
+
+@app.post("/warm-model")
+async def warm_model(request: Request):
+    body = await request.json()
+    model = (body.get("model") or "").strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="model is required")
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json={"model": model, "prompt": "", "keep_alive": "10m"},
+            )
+        resp.raise_for_status()
+        return {"ok": True, "model": model}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not load model: {exc}")
+
+
 
 
 # ── Health ────────────────────────────────────────────────────
@@ -299,8 +371,11 @@ async def upload_document(
 
     scope = f"conversation:{conversation_id}" if conversation_id else "global"
     doc_id = str(uuid.uuid4())
-    chunk_count = await rag.ingest(doc_id, user_email, text, scope=scope)
-    notices = copyright_extract.extract(text)
+    chunk_count, summary, notices = await asyncio.gather(
+        rag.ingest(doc_id, user_email, text, scope=scope),
+        summarize_document(text),
+        asyncio.to_thread(copyright_extract.extract, text),
+    )
 
     ts = now_iso()
     meta = {
@@ -311,6 +386,7 @@ async def upload_document(
         "chunk_count": chunk_count,
         "created_at": ts,
         "scope": scope,
+        "summary": summary,
         "copyright_notices": notices,
     }
     with db_lock:
@@ -382,10 +458,18 @@ async def chat(req: ChatRequest, request: Request):
     except Exception:
         doc_chunks, doc_ids = [], []
 
+    # Collect all available documents for this user+conversation (for awareness listing)
+    _DocQ = Query()
+    scope_filter = (
+        (_DocQ.user_email == user_email)
+        & ((_DocQ.scope == "global") | (_DocQ.scope == f"conversation:{conv_id}"))
+    )
+    with db_lock:
+        all_docs = documents_table.search(scope_filter)
+
     # Collect copyright notices from the matched documents
     doc_copyright_notices: list[str] = []
     if doc_ids:
-        _DocQ = Query()
         with db_lock:
             for _did in dict.fromkeys(doc_ids):  # unique, order-preserving
                 _rows = documents_table.search(_DocQ.id == _did)
@@ -396,6 +480,21 @@ async def chat(req: ChatRequest, request: Request):
     messages = []
     if req.system:
         messages.append({"role": "system", "content": req.system.strip()})
+
+    # Always tell the model what documents are available, even when RAG found no chunks
+    if all_docs:
+        doc_lines = []
+        for d in all_docs:
+            line = f"  • {d['filename']}"
+            if d.get("summary"):
+                line += f": {d['summary']}"
+            doc_lines.append(line)
+        messages.append({"role": "system", "content": (
+            "The user has uploaded the following documents:\n"
+            + "\n".join(doc_lines)
+            + "\n\nRelevant excerpts will be provided below when they match the query. "
+            "When asked about these documents, use the excerpts provided or the summaries above."
+        )})
 
     context_parts = []
     if doc_chunks:
@@ -462,8 +561,9 @@ async def chat(req: ChatRequest, request: Request):
 
                 async for chunk in _stream_ollama(client, first_payload):
                     if "_error" in chunk:
-                        # Model doesn't support tools — retry without them
+                        # Model doesn't support tools — notify client and retry without them
                         if "does not support tools" in chunk["_error"]:
+                            yield _sse({"type": "warning", "detail": f"{model} does not support web search (tool calling). Responding without it."})
                             async for chunk2 in _stream_ollama(client, payload):
                                 if "_error" in chunk2:
                                     yield _sse({"type": "error", "detail": chunk2["_error"]})

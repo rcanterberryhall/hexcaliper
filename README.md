@@ -6,13 +6,16 @@ A self-hosted chat interface for local LLMs via [Ollama](https://ollama.com), wi
 
 - **Multi-model chat** — switch between any model pulled into your local Ollama instance
 - **Persistent conversations** — history stored in a lightweight TinyDB JSON file
-- **Document RAG** — upload PDF, DOCX, TXT, or Markdown files; relevant chunks are retrieved and injected into context automatically
+- **Document RAG** — upload PDF, DOCX, XLSX, TXT, or Markdown files; relevant chunks are retrieved and injected into context automatically
+- **Document summaries** — each document is summarised by the model at upload time; the summary is always included in context so the model knows what documents exist even when RAG retrieves no matching chunks
 - **Scoped documents** — documents can be global (available in every chat) or scoped to a single conversation (visible only in that chat, deleted when the conversation is deleted)
 - **Autonomous web search** — models that support tool calling (e.g. Qwen3, Qwen2.5, Mistral) automatically search DuckDuckGo when the question requires current information; a live "Searching the web…" indicator shows while results are fetched
 - **URL fetching** — paste a URL in your message and the page content is fetched and included as context
 - **Streaming responses** — tokens stream to the browser via Server-Sent Events
 - **Thinking model support** — extended reasoning tokens from DeepSeek-R1, QwQ, and similar models are displayed separately
 - **Live GPU meter** — real-time utilisation and VRAM readout via NVML
+- **Model status indicator** — dot and label next to the model selector shows whether the model is loaded in VRAM; **Load** button pre-warms it, **↻** refreshes the model list
+- **Error and warning bar** — errors (Ollama timeout, network failure) and warnings (tool-calling unsupported for selected model) appear in a dismissible strip at the top of the page
 - **Multi-user ready** — user isolation via Cloudflare Access header (`cf-access-authenticated-user-email`); falls back to `local@dev` for local use
 
 ## Architecture
@@ -193,11 +196,24 @@ Running on Windows is possible in theory via WSL2 and Docker Desktop:
 
 ### Global documents
 
-Uploaded from the **Global Documents** section in the sidebar. These are injected into every conversation for that user whenever a relevant chunk is found.
+Uploaded from the **Global Documents** section in the sidebar. These are available in every conversation for that user. Relevant chunks are retrieved via RAG and the document summary is always included in context.
 
 ### Chat-scoped documents
 
 Uploaded from the **Chat Documents** section that appears in the sidebar once a conversation is active. These are only retrieved in that specific conversation — they are invisible to all other chats and are automatically deleted (including their vector embeddings) when the conversation is deleted. Use this to keep context tight for local models.
+
+### Supported formats
+
+| Format | Notes |
+|--------|-------|
+| `.pdf` | Full text extraction via pypdf |
+| `.docx` | Paragraph text via python-docx |
+| `.xlsx` | All sheets, tab-separated rows via openpyxl |
+| `.txt` / `.md` | Plain UTF-8 |
+
+### Document summaries
+
+When a document is uploaded, the model automatically generates a 2–3 sentence summary from the first 6,000 characters. This summary is injected into every chat so the model knows what documents exist and what they contain — even if no relevant chunks are retrieved by RAG for a given query.
 
 ## Web search
 
@@ -227,6 +243,8 @@ The FastAPI backend exposes these endpoints (all prefixed with `/api/` when acce
 | `GET` | `/gpu` | GPU utilisation and VRAM |
 | `GET/POST/DELETE` | `/conversations[/{id}]` | Manage conversations |
 | `GET/POST/DELETE` | `/documents[/{id}]` | Manage uploaded documents |
+| `GET` | `/model-status` | Check if a model is loaded in Ollama (`?model=name`) |
+| `POST` | `/warm-model` | Pre-load a model into VRAM |
 | `POST` | `/chat` | Send a message (SSE streaming) |
 
 Interactive docs are available at `http://localhost:8000/docs` when the container is running.
@@ -247,6 +265,7 @@ Hexcaliper is built on the shoulders of these open source projects:
 | [pydantic](https://github.com/pydantic/pydantic) | MIT | Request/response data validation |
 | [pypdf](https://github.com/py-pdf/pypdf) | BSD-3-Clause | PDF text extraction |
 | [python-docx](https://github.com/python-openxml/python-docx) | MIT | DOCX text extraction |
+| [openpyxl](https://openpyxl.readthedocs.io/) | MIT | XLSX text extraction |
 | [BeautifulSoup4](https://www.crummy.com/software/BeautifulSoup/) | MIT | HTML parsing for URL fetching |
 | [pynvml](https://github.com/gpuopenanalytics/pynvml) | BSD-3-Clause | NVIDIA GPU monitoring |
 | [python-multipart](https://github.com/Kludex/python-multipart) | Apache-2.0 | File upload parsing |
