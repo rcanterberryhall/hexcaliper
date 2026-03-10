@@ -1,9 +1,20 @@
+"""
+web_search.py — DuckDuckGo web-search integration.
+
+Performs a synchronous HTML scrape of DuckDuckGo and returns structured
+search results (title, URL, snippet) that can be injected into the chat
+prompt as grounding context.
+"""
+
 import httpx
 from bs4 import BeautifulSoup
 
+# Maximum number of search results to return per query.
 MAX_RESULTS = 5
+# Maximum characters kept per result snippet to limit prompt size.
 MAX_SNIPPET_CHARS = 400
 
+# Browser-like headers to avoid being blocked by DuckDuckGo.
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -14,8 +25,23 @@ _HEADERS = {
 }
 
 
+# ── Search ─────────────────────────────────────────────────────
+
 def search(query: str, max_results: int = MAX_RESULTS) -> list[dict]:
-    """Return a list of {title, url, snippet} dicts from DuckDuckGo HTML search."""
+    """
+    Query DuckDuckGo and return structured search results.
+
+    Performs a synchronous GET against the DuckDuckGo HTML interface and
+    parses the response with BeautifulSoup.  Each result is a dict with
+    the keys ``title``, ``url``, and ``snippet``.
+
+    :param query: The search query string.
+    :type query: str
+    :param max_results: Maximum number of results to return.
+    :type max_results: int
+    :return: A list of result dicts, or an empty list if the request fails.
+    :rtype: list[dict]
+    """
     try:
         with httpx.Client(timeout=15.0, follow_redirects=True, headers=_HEADERS) as client:
             resp = client.get(
@@ -44,6 +70,19 @@ def search(query: str, max_results: int = MAX_RESULTS) -> list[dict]:
 
 
 def format_results(results: list[dict]) -> str:
+    """
+    Format a list of search result dicts into a human-readable string.
+
+    Each result is rendered as a numbered entry with its title, URL, and
+    snippet, separated by blank lines.  Used to build the context block
+    injected into the chat prompt.
+
+    :param results: A list of result dicts as returned by :func:`search`.
+    :type results: list[dict]
+    :return: A formatted multi-line string, or ``"No results found."`` if
+             *results* is empty.
+    :rtype: str
+    """
     if not results:
         return "No results found."
     parts = []
