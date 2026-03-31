@@ -1,6 +1,9 @@
 # Runtime data
 data/chroma/
 data/db.json
+data/*.db
+data/*.db-shm
+data/*.db-wal
 
 # NVIDIA binary (machine-specific, copy before build)
 api/libnvidia-ml.so.1
