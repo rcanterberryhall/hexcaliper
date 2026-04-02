@@ -16,6 +16,8 @@ No data leaves your machine unless you explicitly approve it.
 - **GraphRAG** — documents are indexed into a concept graph; retrieval uses both vector similarity and graph traversal for richer context
 - **Scoped documents** — global, client, project, or session scope; each conversation only sees what it should
 - **Document summaries** — every uploaded document gets a model-generated summary injected into every chat so the model always knows what exists
+- **System prompt management** — create, name, and save reusable system prompts; assign one to any conversation via the sidebar; the assigned prompt is prepended as a system message on every chat request
+- **Conversation export** — download any conversation as Markdown (with title, model, system prompt, and timestamped messages) or JSON (full structured payload including system prompt object and message array)
 - **Streaming responses** — tokens stream to the browser via SSE
 - **Thinking model support** — extended reasoning tokens from DeepSeek-R1, QwQ, etc. are shown in a collapsible section
 - **Autonomous web search** — tool-capable models (Qwen3, Qwen2.5, Mistral) search DuckDuckGo automatically when current information is needed
