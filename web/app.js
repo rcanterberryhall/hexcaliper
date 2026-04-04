@@ -1620,13 +1620,19 @@ wbOpenChatBtn.addEventListener('click', () => {
 wbDocUpload.addEventListener('change', async () => {
   const files = Array.from(wbDocUpload.files);
   if (!files.length) return;
+  wbDocUpload.value = '';
+
   const docType = wbUploadType.value;
   const total   = files.length;
+  let   done    = 0;
   let   failed  = 0;
 
+  uploadInProgress = true;
+  gpuFastInterval = setInterval(pollGpu, 500);
+
   for (let i = 0; i < files.length; i++) {
-    const file = files[i];
-    setStatus(`Uploading ${i + 1} of ${total}: ${file.name}…`, 'busy');
+    const file   = files[i];
+    const prefix = total > 1 ? `[${i + 1}/${total}] ` : '';
 
     const fd = new FormData();
     fd.append('file', file);
@@ -1636,30 +1642,49 @@ wbDocUpload.addEventListener('change', async () => {
     else if (wbScope.type === 'client' && wbScope.clientId) fd.append('client_id', wbScope.clientId);
 
     try {
-      const res = await fetch('/api/documents', { method: 'POST', body: fd });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        setStatus(`✗ ${file.name}: ${err.detail || 'upload failed'}`, 'error');
-        failed++;
-      }
-    } catch {
-      setStatus(`✗ ${file.name}: network error`, 'error');
+      await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/documents');
+        xhr.upload.addEventListener('load', () => {
+          setStatus(`${prefix}Embedding ${file.name}…`, 'busy');
+        });
+        xhr.addEventListener('load', () => {
+          if (xhr.status >= 200 && xhr.status < 300) resolve();
+          else {
+            let detail = `HTTP ${xhr.status}`;
+            try { detail = JSON.parse(xhr.responseText).detail || detail; } catch (_) {}
+            reject(new Error(detail));
+          }
+        });
+        xhr.addEventListener('error', () => reject(new Error('Network error')));
+        xhr.addEventListener('abort', () => reject(new Error('Aborted')));
+        setStatus(`${prefix}Uploading ${file.name}…`, 'busy');
+        xhr.send(fd);
+      });
+      done++;
+      setStatus(`${prefix}✓ ${file.name} — ${total - i - 1} remaining`, 'busy');
+    } catch (err) {
       failed++;
+      setStatus(`${prefix}✗ ${file.name}: ${err.message}`, 'error');
     }
   }
 
-  wbDocUpload.value = '';
+  uploadInProgress = false;
+  clearInterval(gpuFastInterval);
+  gpuFastInterval = null;
+
   await loadWbDocs();
+  await Promise.all([pollModelStatus(), pollAnalysisModelStatus()]);
 
   if (failed === 0) {
     setStatus(
       total === 1
         ? `✓ ${files[0].name} uploaded — categorise then click Index Documents`
-        : `✓ ${total} files uploaded — categorise then click Index Documents`,
+        : `✓ ${done} files uploaded — categorise then click Index Documents`,
       'info'
     );
   } else {
-    setStatus(`${total - failed} of ${total} uploaded — ${failed} failed`, 'error');
+    setStatus(`${done} of ${total} uploaded, ${failed} failed`, failed === total ? 'error' : 'warning');
   }
 });
 
