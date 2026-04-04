@@ -171,6 +171,80 @@ function addEscalateBtn(inner, convId, queryText, docIds, hasClientDocs) {
   inner.appendChild(btn);
 }
 
+/**
+ * Appends a "Deep Analysis →" button to an AI message, submitting the
+ * exchange to merLLM's batch API for extended-context night-mode processing.
+ * Polls for completion and renders the result as a new message.
+ */
+function addDeepAnalysisBtn(inner, bubble, convId, queryText) {
+  const btn = document.createElement('button');
+  btn.className = 'deep-btn';
+  btn.textContent = 'Deep Analysis →';
+  btn.title = 'Submit for extended-context analysis in merLLM night mode';
+  btn.addEventListener('click', async () => {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = 'Queuing…';
+    const responseText = bubble.innerText || bubble.textContent;
+    const prompt = [
+      'Please provide a deep, thorough analysis of the following conversation exchange.',
+      'Explore implications, nuances, alternative perspectives, and any aspects that warrant deeper investigation.',
+      'Do not summarize — analyze.\n',
+      'User:',
+      queryText,
+      '\nAssistant:',
+      responseText,
+    ].join('\n');
+    try {
+      const res = await fetch('/api/batch/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_app: 'lancellmot', prompt }),
+      });
+      if (!res.ok) throw new Error(((await res.json().catch(() => ({}))).detail) || res.status);
+      const { id } = await res.json();
+      btn.textContent = '⏳ Queued';
+      setStatus('Deep analysis queued — will complete in night mode.', 'info');
+      _pollDeepAnalysis(id, btn);
+    } catch (e) {
+      btn.disabled = false;
+      btn.textContent = 'Deep Analysis →';
+      setStatus('Deep analysis submit failed: ' + e.message, 'error');
+    }
+  });
+  inner.appendChild(btn);
+}
+
+function _pollDeepAnalysis(jobId, btn) {
+  const MAX = 360; // 30 min at 5s intervals
+  let n = 0;
+  const iv = setInterval(async () => {
+    if (++n > MAX) {
+      clearInterval(iv);
+      btn.textContent = 'Timed out';
+      return;
+    }
+    try {
+      const s = await fetch(`/api/batch/status/${jobId}`).then(r => r.json());
+      if (s.status === 'completed') {
+        clearInterval(iv);
+        const data = await fetch(`/api/batch/results/${jobId}`).then(r => r.json());
+        btn.textContent = '✓ Done';
+        createMessage('ai', data.result || '(no result)', { modelTag: 'deep analysis' });
+        scrollToBottom();
+        setStatus('Deep analysis complete.', 'info');
+      } else if (s.status === 'failed') {
+        clearInterval(iv);
+        btn.disabled = false;
+        btn.textContent = 'Failed';
+        setStatus('Deep analysis failed: ' + (s.error || 'unknown'), 'error');
+      } else {
+        btn.textContent = s.status === 'running' ? '⚙ Running…' : '⏳ Queued';
+      }
+    } catch (_) { /* network hiccup — keep polling */ }
+  }, 5000);
+}
+
 function addCopyBtn(inner, bubble) {
   const btn = document.createElement('button');
   btn.className = 'copy-btn';
@@ -960,6 +1034,7 @@ form.addEventListener('submit', async (e) => {
       addMeta(inner, doneData.model, doneData.sources);
       addCopyBtn(inner, bubble);
       addEscalateBtn(inner, doneData.conversation_id, message, doneData.doc_ids || [], doneData.has_client_docs || false);
+      addDeepAnalysisBtn(inner, bubble, doneData.conversation_id, message);
       if (!currentConvId) {
         currentConvId = doneData.conversation_id;
         await fetchConversations();

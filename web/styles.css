@@ -354,6 +354,25 @@ header img {
 .escalate-btn:hover { color: var(--purple); border-color: var(--purple); }
 .escalate-btn:disabled { cursor: default; opacity: 1; }
 
+/* ── Deep Analysis button ────────────────────────────────────── */
+.deep-btn {
+  display: inline-block;
+  margin-top: 5px;
+  margin-left: 4px;
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 0.67rem;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+}
+.message.ai:hover .deep-btn { opacity: 1; }
+.deep-btn:hover { color: var(--gold); border-color: var(--gold); }
+.deep-btn:disabled { cursor: default; opacity: 1; }
+
 /* Spinner ── */
 .spinner {
   display: inline-block;

@@ -75,6 +75,53 @@ async def merllm_status():
         return {"ok": False, "error": str(exc), "mode": "unknown"}
 
 
+@router.post("/batch/submit")
+async def batch_submit(request: Request):
+    """Proxy POST /api/batch/submit to merLLM for deep analysis job submission."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(
+                f"{config.MERLLM_URL}/api/batch/submit",
+                content=body,
+                headers={"Content-Type": "application/json"},
+            )
+            return r.json()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"merLLM unreachable: {exc}")
+
+
+@router.get("/batch/status/{job_id}")
+async def batch_status(job_id: str):
+    """Proxy GET /api/batch/status/{job_id} to merLLM."""
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(f"{config.MERLLM_URL}/api/batch/status/{job_id}")
+            if r.status_code == 404:
+                raise HTTPException(status_code=404, detail="Job not found")
+            return r.json()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"merLLM unreachable: {exc}")
+
+
+@router.get("/batch/results/{job_id}")
+async def batch_results(job_id: str):
+    """Proxy GET /api/batch/results/{job_id} to merLLM."""
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(f"{config.MERLLM_URL}/api/batch/results/{job_id}")
+            if r.status_code in (404, 409):
+                raise HTTPException(status_code=r.status_code,
+                                    detail=r.json().get("detail", ""))
+            return r.json()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"merLLM unreachable: {exc}")
+
+
 @router.post("/warm-model")
 async def post_warm_model(request: Request):
     body  = await request.json()
