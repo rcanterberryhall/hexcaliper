@@ -487,14 +487,34 @@ async def store_escalation_cache(query_text: str, response_text: str) -> None:
     """
     Store a query/response pair in the escalation cache for future reuse.
 
+    Adds a ``created_at`` timestamp to the metadata. After inserting, evicts
+    the oldest entries if the collection exceeds ``MAX_ESCALATION_CACHE_SIZE``.
+
     :param query_text:    The original query that was sent to the cloud model.
     :param response_text: The cloud model's response.
     """
+    import time as _time
     col = _get_cache_collection()
     embedding = await embed(query_text)
     col.add(
         ids=[str(_uuid.uuid4())],
         embeddings=[embedding],
         documents=[query_text],
-        metadatas=[{"response": response_text, "query_preview": query_text[:200]}],
+        metadatas=[{
+            "response":      response_text,
+            "query_preview": query_text[:200],
+            "created_at":    _time.time(),
+        }],
     )
+
+    max_size = config.MAX_ESCALATION_CACHE_SIZE
+    count = col.count()
+    if count > max_size:
+        evict_n = count - max_size
+        all_entries = col.get(include=["metadatas"])
+        ids_with_ts = [
+            (id_, meta.get("created_at", 0.0))
+            for id_, meta in zip(all_entries["ids"], all_entries["metadatas"])
+        ]
+        oldest = sorted(ids_with_ts, key=lambda x: x[1])[:evict_n]
+        col.delete(ids=[id_ for id_, _ in oldest])

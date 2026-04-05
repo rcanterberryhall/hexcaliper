@@ -46,7 +46,7 @@ EXTRACT_TIMEOUT = float(config._get("EXTRACT_TIMEOUT_SECONDS", "120"))
 
 
 def _extract_model() -> str:
-    return config._get("EXTRACT_MODEL", "") or config.ANALYSIS_MODEL
+    return config.EXTRACT_MODEL
 
 
 # ── Seeded concept vocabulary ─────────────────────────────────────────────────

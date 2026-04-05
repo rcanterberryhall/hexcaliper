@@ -13,6 +13,9 @@ OLLAMA_BASE_URL = _get("OLLAMA_BASE_URL", "http://host.docker.internal:11400")
 MERLLM_URL      = _get("MERLLM_URL",      "http://host.docker.internal:11400")
 DEFAULT_MODEL   = _get("DEFAULT_MODEL", "qwen3:32b")
 ANALYSIS_MODEL  = _get("ANALYSIS_MODEL", "") or DEFAULT_MODEL
+# Model used for graph/concept extraction. Defaults to ANALYSIS_MODEL.
+# Set to a smaller model if you want extraction to run faster at lower quality.
+EXTRACT_MODEL   = _get("EXTRACT_MODEL", "") or ANALYSIS_MODEL
 EMBED_MODEL     = _get("EMBED_MODEL", "nomic-embed-text")
 
 MAX_INPUT_CHARS = int(_get("MAX_INPUT_CHARS", "20000"))
@@ -31,6 +34,9 @@ ESCALATION_PROVIDER = _get("ESCALATION_PROVIDER", "anthropic")
 ESCALATION_API_KEY  = _get("ESCALATION_API_KEY", "")
 ESCALATION_MODEL    = _get("ESCALATION_MODEL", "claude-haiku-4-5-20251001")
 AUTO_ESCALATE       = _get("AUTO_ESCALATE", "false").lower() == "true"
+# Maximum number of entries in the escalation semantic cache.
+# When exceeded, the oldest entries (by created_at) are evicted.
+MAX_ESCALATION_CACHE_SIZE = int(_get("MAX_ESCALATION_CACHE_SIZE", "500"))
 
 # ── M-Files connection ────────────────────────────────────────────────────────
 MFILES_HOST  = _get("MFILES_HOST", "")   # e.g. "mfiles.example.com"
