@@ -33,11 +33,50 @@ const systemBtn         = document.getElementById('system-btn');
 const statusBar         = document.getElementById('status-bar');
 const statusSpinner     = document.getElementById('status-spinner');
 const statusMsg         = document.getElementById('status-msg');
+const scopeBadge        = document.getElementById('scope-badge');
 
 let currentConvId = null;
 let abortController = null;
 let uploadInProgress = false;
 let gpuFastInterval = null;
+
+// ── Scope badge ────────────────────────────────────────────────
+
+/**
+ * Refresh the scope badge in the chat header.
+ *
+ * Reads the active project from chatView.dataset (set when a workbench project
+ * is opened in chat) and fetches the document count for that scope via the
+ * /api/documents endpoint.
+ */
+async function updateScopeBadge() {
+  if (!scopeBadge) return;
+  const projectId   = document.getElementById('chat-view')?.dataset?.projectId;
+  const projectName = document.getElementById('chat-view')?.dataset?.projectName;
+
+  let scopeLabel, queryParam;
+  if (projectId) {
+    scopeLabel  = `Project: ${projectName || projectId}`;
+    queryParam  = `?project_id=${encodeURIComponent(projectId)}`;
+  } else {
+    scopeLabel = 'Global';
+    queryParam = '';
+  }
+
+  let count = '…';
+  try {
+    const res  = await fetch(`/api/documents${queryParam}`);
+    const docs = res.ok ? await res.json() : [];
+    count = docs.length;
+  } catch (_) { count = '?'; }
+
+  const warn    = count === 0 && !!projectId;
+  scopeBadge.className = 'scope-badge-pill' + (warn ? ' scope-warn' : '');
+  scopeBadge.innerHTML =
+    `<span class="scope-type">${esc(scopeLabel)}</span>` +
+    `<span class="scope-count">${count} doc${count !== 1 ? 's' : ''}</span>` +
+    (warn ? '<span class="scope-warn-icon" title="No documents in this scope">⚠</span>' : '');
+}
 
 // ── Markdown rendering ─────────────────────────────────────────
 marked.use({
@@ -754,6 +793,7 @@ newChatBtn.addEventListener('click', () => {
   delete chatView.dataset.projectId;
   delete chatView.dataset.projectName;
   input.placeholder = 'Ask anything…';
+  updateScopeBadge();
 });
 
 // ── Documents ────────────────────────────────────────────────
@@ -889,6 +929,7 @@ async function fetchDocuments() {
     const res = await fetch('/api/documents');
     if (!res.ok) return;
     renderDocList(await res.json());
+    updateScopeBadge();
   } catch (_) {}
 }
 
@@ -1750,6 +1791,7 @@ wbOpenChatBtn.addEventListener('click', () => {
   chatView.dataset.projectId   = wbScope.projectId;
   chatView.dataset.projectName = wbScope.label;
   input.placeholder = `Ask anything… (project: ${wbScope.label})`;
+  updateScopeBadge();
   input.focus();
 });
 
@@ -2241,6 +2283,13 @@ applySiteConfig();
 fetchModels().then(() => Promise.all([pollModelStatus(), pollAnalysisModelStatus()]));
 fetchConversations();
 fetchDocuments();
+updateScopeBadge();
+if (scopeBadge) {
+  scopeBadge.addEventListener('click', () => {
+    sidebar.classList.remove('collapsed');
+    docList.closest('section,div')?.scrollIntoView?.({ behavior: 'smooth' });
+  });
+}
 fetchSystemPrompts();
 pollGpu();
 setInterval(pollGpu, 3000);
