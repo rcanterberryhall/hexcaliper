@@ -1,14 +1,18 @@
 """
 app.py — FastAPI application entry point. Thin bootstrap only.
 """
+import logging
+import time as _time
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
+_req_log = logging.getLogger("hexcaliper.requests")
+
 import config
 import db
 import rag
-from routers import health, conversations, documents, library, chat, tech_library, acquisition, escalation, connections, system_prompts
+from routers import health, conversations, documents, library, chat, tech_library, acquisition, escalation, connections, system_prompts, status
 from routers.documents import active_upload_snapshot
 
 app = FastAPI(title="LanceLLMot API", version="4.0.0")
@@ -39,6 +43,25 @@ class LibraryModeMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    """Log every HTTP request with method, path, status, duration, and user."""
+    async def dispatch(self, request: Request, call_next):
+        start = _time.monotonic()
+        response = await call_next(request)
+        ms = int(((_time.monotonic() - start)) * 1000)
+        user = request.headers.get("CF-Access-Authenticated-User-Email", "anonymous")
+        status = response.status_code
+        msg = "%s %s %d %dms [%s]", request.method, request.url.path, status, ms, user
+        if status >= 500:
+            _req_log.error(*msg)
+        elif status >= 400:
+            _req_log.warning(*msg)
+        else:
+            _req_log.info(*msg)
+        return response
+
+
+app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(LibraryModeMiddleware)
 
 app.include_router(health.router)
@@ -50,6 +73,7 @@ app.include_router(acquisition.router)   # /acquisition  — acquisition queue +
 app.include_router(escalation.router)   # /escalation   — cloud escalation queue + SSE
 app.include_router(connections.router)    # /connections  — external system connections
 app.include_router(system_prompts.router) # /system-prompts — saved system prompts
+app.include_router(status.router)         # /status         — cross-service status
 app.include_router(chat.router)
 
 
