@@ -3,9 +3,12 @@ routers/chat.py — Streaming chat endpoint with RAG + graph context.
 """
 import asyncio
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
+
+log = logging.getLogger(__name__)
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -93,9 +96,12 @@ async def chat(req: ChatRequest, request: Request):
 
     scope_types, scope_ids = _build_scope(user_email, conv_id, req.project_id)
 
+    rag_errors: list[str] = []
+
     try:
         url_context = await web_fetch.fetch_context(req.message)
     except Exception:
+        log.exception("Web fetch failed, proceeding without URL context")
         url_context = {}
 
     try:
@@ -103,7 +109,9 @@ async def chat(req: ChatRequest, request: Request):
             user_email, req.message,
             scope_types=scope_types, scope_ids=scope_ids,
         )
-    except Exception:
+    except Exception as exc:
+        log.exception("RAG vector search failed, proceeding without document context")
+        rag_errors.append(f"vector search: {exc}")
         doc_chunks, doc_ids, chunk_ids = [], [], []
 
     with db.lock:
@@ -137,8 +145,9 @@ async def chat(req: ChatRequest, request: Request):
                     doc_titles=doc_title_map,
                 )
                 graph_chunks = list(chunk_text_map.values())
-    except Exception:
-        pass
+    except Exception as exc:
+        log.exception("Graph context retrieval failed, proceeding without graph context")
+        rag_errors.append(f"graph context: {exc}")
 
     # Copyright notices
     doc_copyright_notices: list[str] = []
@@ -213,13 +222,28 @@ async def chat(req: ChatRequest, request: Request):
     payload  = {"model": model, "stream": True, "messages": messages}
     if supports_think:
         payload["think"] = True
-    sources  = {"doc_chunks": len(doc_chunks), "graph_chunks": len(graph_chunks),
-                "urls": list(url_context.keys())}
+    sources  = {
+        "doc_chunks":   len(doc_chunks),
+        "graph_chunks": len(graph_chunks),
+        "urls":         list(url_context.keys()),
+        "rag_status":   "error" if rag_errors else "ok",
+        "rag_errors":   rag_errors,
+    }
 
     async def generate():
         reply_parts:    list[str] = []
         search_queries: list[str] = []
         _saved = False
+
+        # Emit retrieval status before the first token so the UI can show
+        # context indicators (doc count, graph nodes, errors) immediately.
+        yield _sse({
+            "type":        "rag_status",
+            "status":      "error" if rag_errors else "ok",
+            "docs_used":   len(doc_chunks),
+            "graph_nodes": len(graph_chunks),
+            "errors":      rag_errors,
+        })
 
         def _save_to_db(partial: bool = False) -> None:
             nonlocal _saved
