@@ -41,6 +41,7 @@ def chat_mocks(monkeypatch):
         ["chunk text A", "chunk text B"],   # doc_chunks
         ["doc1", "doc1"],                    # doc_ids
         ["cid1", "cid2"],                    # chunk_ids
+        [0.85, 0.72],                        # scores
     )))
     monkeypatch.setattr(rag, "get_chunks_by_ids", MagicMock(return_value={}))
     monkeypatch.setattr(graph, "get_context", MagicMock(return_value=[]))
@@ -61,7 +62,7 @@ def chat_mocks_rag_fail(monkeypatch):
     import web_fetch
     import ollama as ollama_mod
 
-    monkeypatch.setattr(rag, "search", AsyncMock(side_effect=RuntimeError("vector DB timeout")))
+    monkeypatch.setattr(rag, "search", AsyncMock(side_effect=RuntimeError("vector DB timeout")))  # scores not returned on failure
     monkeypatch.setattr(rag, "get_chunks_by_ids", MagicMock(return_value={}))
     monkeypatch.setattr(graph, "get_context", MagicMock(return_value=[]))
     monkeypatch.setattr(web_fetch, "fetch_context", AsyncMock(return_value={}))

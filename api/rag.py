@@ -274,7 +274,7 @@ async def search(
     top_k: int = TOP_K,
     scope_types: list[str] = None,
     scope_ids: list = None,
-) -> tuple[list[str], list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str], list[float]]:
     """
     Retrieve the most relevant document chunks for a query.
 
@@ -297,9 +297,10 @@ async def search(
     :param scope_ids: Parallel list of scope IDs corresponding to
         *scope_types*.  Use ``None`` for ``"global"`` entries.
     :type scope_ids: list | None
-    :return: A tuple of ``(text_chunks, doc_ids, chunk_ids)`` for chunks that
-        pass the distance threshold.
-    :rtype: tuple[list[str], list[str], list[str]]
+    :return: A tuple of ``(text_chunks, doc_ids, chunk_ids, scores)`` for
+        chunks that pass the distance threshold.  Scores are in [0, 1] with
+        higher values indicating greater similarity.
+    :rtype: tuple[list[str], list[str], list[str], list[float]]
     """
     if scope_types is None:
         scope_types = ["global"]
@@ -309,7 +310,7 @@ async def search(
 
     col = get_collection()
     if col.count() == 0:
-        return [], [], []
+        return [], [], [], []
     query_emb = await embed(query)
 
     # Build the ChromaDB metadata filter.
@@ -346,8 +347,8 @@ async def search(
             include=["documents", "distances", "metadatas", "ids"],
         )
         if not results["documents"]:
-            return [], [], []
-        chunks, doc_ids, chunk_ids = [], [], []
+            return [], [], [], []
+        chunks, doc_ids, chunk_ids, scores = [], [], [], []
         for doc, dist, meta, cid in zip(
             results["documents"][0],
             results["distances"][0],
@@ -359,9 +360,10 @@ async def search(
                 chunks.append(doc)
                 doc_ids.append(meta.get("doc_id", ""))
                 chunk_ids.append(cid)
-        return chunks, doc_ids, chunk_ids
+                scores.append(round(1.0 - dist, 4))
+        return chunks, doc_ids, chunk_ids, scores
     except Exception:
-        return [], [], []
+        return [], [], [], []
 
 
 # ── Deletion ───────────────────────────────────────────────────

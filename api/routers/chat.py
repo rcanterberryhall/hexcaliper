@@ -104,8 +104,9 @@ async def chat(req: ChatRequest, request: Request):
         log.exception("Web fetch failed, proceeding without URL context")
         url_context = {}
 
+    chunk_scores: list[float] = []
     try:
-        doc_chunks, doc_ids, chunk_ids = await rag.search(
+        doc_chunks, doc_ids, chunk_ids, chunk_scores = await rag.search(
             user_email, req.message,
             scope_types=scope_types, scope_ids=scope_ids,
         )
@@ -230,6 +231,25 @@ async def chat(req: ChatRequest, request: Request):
         "rag_errors":   rag_errors,
     }
 
+    # Build attribution data for the sources SSE event.
+    doc_title_map_outer = {d["id"]: d.get("filename", d["id"]) for d in all_docs}
+    sources_docs: list[dict] = [
+        {
+            "name":  doc_title_map_outer.get(did, did),
+            "chunk": chunk[:100],
+            "score": score,
+        }
+        for chunk, did, score in zip(doc_chunks, doc_ids, chunk_scores)
+    ]
+    sources_graph: list[dict] = [
+        {
+            "entity":   ctx.get("label") or ctx.get("chunk_id", ""),
+            "relation": ctx.get("context_edge", "related"),
+            "score":    ctx.get("context_score", 0.0),
+        }
+        for ctx in collected_ctx
+    ]
+
     async def generate():
         reply_parts:    list[str] = []
         search_queries: list[str] = []
@@ -336,6 +356,11 @@ async def chat(req: ChatRequest, request: Request):
             yield _sse({"type": "error", "detail": "Ollama returned an empty reply."}); return
         _save_to_db()
         sources["web_searches"] = search_queries
+        yield _sse({
+            "type":        "sources",
+            "documents":   sources_docs,
+            "graph_nodes": sources_graph,
+        })
         yield _sse({"type": "done", "conversation_id": conv_id, "model": model, "sources": sources,
                     "doc_ids": list(dict.fromkeys(doc_ids)), "has_client_docs": has_client_docs})
 

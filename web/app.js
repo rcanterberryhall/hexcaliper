@@ -270,6 +270,63 @@ function addCopyBtn(inner, bubble) {
  * - `content` {HTMLElement}: The content element inside the "Think Block".
  * - `label` {HTMLElement}: The label element in the header for updating or accessing its text.
  */
+/**
+ * Build a collapsible Sources attribution block showing retrieved documents
+ * and graph nodes. Inserted below the assistant message bubble.
+ *
+ * @param {Object[]} documents - [{name, chunk, score}]
+ * @param {Object[]} graphNodes - [{entity, relation, score}]
+ * @returns {HTMLElement} The root element of the sources block.
+ */
+function buildSourcesBlock(documents, graphNodes) {
+  const block = document.createElement('div');
+  block.className = 'sources-block collapsed';
+
+  const header = document.createElement('div');
+  header.className = 'sources-header';
+  const total = documents.length + graphNodes.length;
+  header.innerHTML = `<span class="sources-chevron">▸</span><span class="sources-label">Sources (${total})</span>`;
+  header.addEventListener('click', () => block.classList.toggle('collapsed'));
+
+  const content = document.createElement('div');
+  content.className = 'sources-content';
+
+  if (documents.length === 0 && graphNodes.length === 0) {
+    content.innerHTML = '<span class="sources-empty">No documents matched this query.</span>';
+  } else {
+    if (documents.length > 0) {
+      const sec = document.createElement('div');
+      sec.className = 'sources-section';
+      sec.innerHTML = '<div class="sources-section-title">Documents</div>' +
+        documents.map(d => {
+          const pct = Math.round((d.score || 0) * 100);
+          return `<div class="sources-item">
+            <span class="sources-doc-name">${esc(d.name)}</span>
+            <span class="sources-score">${pct}%</span>
+            <div class="sources-chunk">${esc(d.chunk)}…</div>
+          </div>`;
+        }).join('');
+      content.appendChild(sec);
+    }
+    if (graphNodes.length > 0) {
+      const sec = document.createElement('div');
+      sec.className = 'sources-section';
+      sec.innerHTML = '<div class="sources-section-title">Graph</div>' +
+        graphNodes.map(n =>
+          `<div class="sources-item sources-graph-item">
+            <span class="sources-entity">${esc(n.entity)}</span>
+            <span class="sources-relation">${esc(n.relation)}</span>
+          </div>`
+        ).join('');
+      content.appendChild(sec);
+    }
+  }
+
+  block.appendChild(header);
+  block.appendChild(content);
+  return block;
+}
+
 function buildThinkBlock(collapsed = false) {
   const block = document.createElement('div');
   block.className = 'think-block' + (collapsed ? ' collapsed' : '');
@@ -1017,6 +1074,10 @@ form.addEventListener('submit', async (e) => {
           bubble.textContent = `Error: ${evt.detail}`;
           showErrorBar(evt.detail);
           break outer;
+        } else if (evt.type === 'sources') {
+          const sb = buildSourcesBlock(evt.documents || [], evt.graph_nodes || []);
+          inner.insertBefore(sb, bubble.nextSibling);
+          scrollToBottom();
         } else if (evt.type === 'done') {
           doneData = evt;
           break outer;

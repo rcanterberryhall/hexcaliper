@@ -777,6 +777,124 @@ body { display: block; }
 
 .think-block.collapsed .think-content { display: none; }
 
+/* ── Sources attribution block ──────────────────────────────── */
+.sources-block {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-top: 6px;
+  margin-bottom: 6px;
+  overflow: hidden;
+}
+
+.sources-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 0.70rem;
+  color: var(--blue);
+  user-select: none;
+  transition: background 0.1s;
+}
+
+.sources-header:hover { background: rgba(255,255,255,0.03); }
+
+.sources-chevron {
+  display: inline-block;
+  font-size: 0.6rem;
+  transition: transform 0.2s;
+}
+
+.sources-block.collapsed .sources-chevron { transform: rotate(0deg); }
+.sources-block:not(.collapsed) .sources-chevron { transform: rotate(90deg); }
+
+.sources-content {
+  display: none;
+  padding: 6px 10px 8px;
+  border-top: 1px solid var(--border);
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.sources-block:not(.collapsed) .sources-content { display: block; }
+
+.sources-empty {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.sources-section { margin-bottom: 8px; }
+.sources-section:last-child { margin-bottom: 0; }
+
+.sources-section-title {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+
+.sources-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin-bottom: 6px;
+  font-size: 0.72rem;
+}
+
+.sources-doc-name {
+  font-weight: 500;
+  color: var(--fg);
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sources-score {
+  font-size: 0.65rem;
+  color: var(--blue);
+  background: rgba(64,184,255,0.10);
+  border-radius: 3px;
+  padding: 1px 4px;
+  flex-shrink: 0;
+}
+
+.sources-chunk {
+  width: 100%;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sources-graph-item { gap: 6px; }
+
+.sources-entity {
+  color: var(--fg);
+  font-weight: 500;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sources-relation {
+  font-size: 0.65rem;
+  color: var(--gold);
+  background: rgba(180,140,60,0.12);
+  border-radius: 3px;
+  padding: 1px 5px;
+  text-transform: lowercase;
+}
+
 /* ── Context badge ──────────────────────────────────────────── */
 .context-badge {
   font-size: 0.68rem;
