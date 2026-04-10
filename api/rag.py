@@ -347,7 +347,7 @@ async def search(
             query_embeddings=[query_emb],
             n_results=top_k,
             where=where,
-            include=["documents", "distances", "metadatas", "ids"],
+            include=["documents", "distances", "metadatas"],
         )
         if not results["documents"]:
             return [], [], [], []
