@@ -8,6 +8,7 @@ and an optional *scope_id* so that search results can be filtered
 appropriately for each request.
 """
 
+import asyncio
 import logging
 import uuid as _uuid
 from datetime import datetime, timezone
@@ -27,6 +28,9 @@ log = logging.getLogger(__name__)
 CHUNK_SIZE = 1000
 # Overlap between consecutive chunks to preserve context across boundaries.
 CHUNK_OVERLAP = 150
+
+# Max concurrent embedding requests during ingest (matches 2-GPU round-robin).
+EMBED_CONCURRENCY = 4
 
 # Number of nearest-neighbour chunks to retrieve per query.
 TOP_K = 4
@@ -155,7 +159,13 @@ async def ingest(
     chunks = chunk_text(text)
     if not chunks:
         return 0
-    embeddings = [await embed(c) for c in chunks]
+    sem = asyncio.Semaphore(EMBED_CONCURRENCY)
+
+    async def _bounded_embed(c: str) -> list[float]:
+        async with sem:
+            return await embed(c)
+
+    embeddings = await asyncio.gather(*[_bounded_embed(c) for c in chunks])
     chunk_ids = [f"{doc_id}__{i}" for i in range(len(chunks))]
     col.add(
         ids=chunk_ids,
