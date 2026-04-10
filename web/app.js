@@ -2332,9 +2332,11 @@ async function pollActivity() {
       ? `${Math.floor(maxElapsed / 60)}m ${Math.round(maxElapsed % 60)}s`
       : `${Math.round(maxElapsed)}s`;
 
+    const stageLabels = { parsing: 'Parsing', embedding: 'Embedding', summarizing: 'Summarizing' };
+    const stage = stageLabels[uploads[0].stage] || 'Processing';
     const msg = count === 1
-      ? `Embedding ${names[0]}… (${elapsedFmt})`
-      : `Embedding ${count} files… (${elapsedFmt})`;
+      ? `${stage} ${names[0]}… (${elapsedFmt})`
+      : `${stage} ${count} files… (${elapsedFmt})`;
 
     setStatus(msg, 'busy');
   } catch { /* non-critical */ }

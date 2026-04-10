@@ -33,7 +33,9 @@ def active_upload_snapshot() -> list[dict]:
     """Return a list of in-progress uploads with elapsed time, newest first."""
     now = time.time()
     return sorted(
-        [{"filename": v["filename"], "elapsed_sec": round(now - v["started_at"], 1)}
+        [{"filename": v["filename"],
+          "stage": v.get("stage", "uploading"),
+          "elapsed_sec": round(now - v["started_at"], 1)}
          for v in _active_uploads.values()],
         key=lambda x: x["elapsed_sec"],
     )
@@ -111,27 +113,29 @@ async def upload_document(
         raise HTTPException(status_code=413, detail="File too large (max 20 MB).")
 
     filename = file.filename or "upload.txt"
-    text     = parser.parse_file(filename, data)
-    if not text:
-        raise HTTPException(status_code=422, detail="Could not extract text from file.")
-
-    if doc_type not in DOC_TYPES:
-        doc_type = "misc"
-
-    scope_type, scope_id = _resolve_scope(conversation_id, project_id, client_id)
-
-    # Auto-classify: client/project-scoped documents are always client-confidential.
-    # Global standards are public; manual uploads default to client unless overridden.
-    if scope_type in ("client", "project"):
-        classification = "client"
-    elif classification not in ("public", "client"):
-        classification = "public" if scope_type == "global" and doc_type == "standard" else "client"
-
     doc_id = str(uuid.uuid4())
     ts     = _now_iso()
+    upload = {"filename": filename, "started_at": time.time(), "stage": "parsing"}
+    _active_uploads[doc_id] = upload
 
-    _active_uploads[doc_id] = {"filename": filename, "started_at": time.time()}
     try:
+        text = await asyncio.to_thread(parser.parse_file, filename, data)
+        if not text:
+            raise HTTPException(status_code=422, detail="Could not extract text from file.")
+
+        if doc_type not in DOC_TYPES:
+            doc_type = "misc"
+
+        scope_type, scope_id = _resolve_scope(conversation_id, project_id, client_id)
+
+        # Auto-classify: client/project-scoped documents are always client-confidential.
+        # Global standards are public; manual uploads default to client unless overridden.
+        if scope_type in ("client", "project"):
+            classification = "client"
+        elif classification not in ("public", "client"):
+            classification = "public" if scope_type == "global" and doc_type == "standard" else "client"
+
+        upload["stage"] = "embedding"
         chunk_count = await rag.ingest(
             doc_id, user_email, text,
             scope_type=scope_type, scope_id=scope_id,
@@ -142,6 +146,7 @@ async def upload_document(
             summary = ""
             notices = []
         else:
+            upload["stage"] = "summarizing"
             summary, notices = await asyncio.gather(
                 ollama.summarize_document(text),
                 asyncio.to_thread(copyright_extract.extract, text),
