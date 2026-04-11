@@ -97,17 +97,25 @@ def chunk_text(text: str) -> list[str]:
 
 # ── Embedding ──────────────────────────────────────────────────
 
-async def embed(text: str) -> list[float]:
+async def embed(text: str, headers: dict | None = None) -> list[float]:
     """
     Generate a vector embedding for *text* using the Ollama embeddings API.
 
     :param text: The text to embed.
     :type text: str
+    :param headers: Optional header dict to send with the request. Defaults to
+        :data:`config.OLLAMA_HEADERS` (``X-Priority: chat``) for user-facing
+        query callers. Bulk-ingest callers must pass
+        :data:`config.OLLAMA_EXTRACTOR_HEADERS` so embedding traffic lands in
+        merLLM's ``background`` bucket and does not preempt real chats.
     :return: A list of floats representing the embedding vector.
     :rtype: list[float]
     :raises httpx.HTTPStatusError: If the Ollama API returns a non-2xx status.
     """
-    async with httpx.AsyncClient(timeout=120.0, headers=config.OLLAMA_HEADERS) as client:
+    async with httpx.AsyncClient(
+        timeout=120.0,
+        headers=headers if headers is not None else config.OLLAMA_HEADERS,
+    ) as client:
         resp = await client.post(
             f"{config.OLLAMA_BASE_URL}/api/embeddings",
             json={"model": config.EMBED_MODEL, "prompt": text},
@@ -163,7 +171,9 @@ async def ingest(
 
     async def _bounded_embed(c: str) -> list[float]:
         async with sem:
-            return await embed(c)
+            # Bulk ingest is not latency-sensitive: route through the
+            # background bucket so a large upload cannot starve real chats.
+            return await embed(c, headers=config.OLLAMA_EXTRACTOR_HEADERS)
 
     embeddings = await asyncio.gather(*[_bounded_embed(c) for c in chunks])
     chunk_ids = [f"{doc_id}__{i}" for i in range(len(chunks))]
