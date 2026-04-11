@@ -2334,7 +2334,7 @@ async function pollActivity() {
       ? `${Math.floor(maxElapsed / 60)}m ${Math.round(maxElapsed % 60)}s`
       : `${Math.round(maxElapsed)}s`;
 
-    const stageLabels = { parsing: 'Parsing', embedding: 'Embedding', summarizing: 'Summarizing' };
+    const stageLabels = { parsing: 'Parsing', embedding: 'Embedding', finalizing: 'Finalizing' };
     const stage = stageLabels[uploads[0].stage] || 'Processing';
     const msg = count === 1
       ? `${stage} ${names[0]}… (${elapsedFmt})`

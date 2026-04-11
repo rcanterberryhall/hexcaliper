@@ -414,7 +414,7 @@ Interactive docs: `http://localhost:8000/docs`
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/documents` | List documents (filterable by scope) |
-| `POST` | `/documents` | Upload a document |
+| `POST` | `/documents` | Upload a document (returns once chunks are embedded and searchable; summary, copyright notices, and concept-graph indexing finish asynchronously in the background) |
 | `PATCH` | `/documents/{id}` | Edit document attributes (filename, doc_type, classification) |
 | `DELETE` | `/documents/{id}` | Delete a document |
 | `POST` | `/documents/reindex` | Re-run concept extraction on all documents |
