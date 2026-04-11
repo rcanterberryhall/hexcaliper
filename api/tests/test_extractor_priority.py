@@ -2,7 +2,7 @@
 test_extractor_priority.py — Verify extractor calls land in merLLM's
 ``background`` bucket and user-facing calls land in the ``chat`` bucket.
 
-merLLM runs a 5-bucket priority queue (chat > reserved > short >
+merLLM runs a 5-bucket priority queue (chat > embeddings > short >
 feedback > background, strict top-down drain). LanceLLMot's concept
 extractor is not latency-sensitive and must go out with
 ``X-Priority: background`` so merLLM waits indefinitely for a GPU slot
