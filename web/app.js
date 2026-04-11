@@ -1267,8 +1267,10 @@ async function pollMerllm() {
     const anyFaulted = Object.values(gpus).some(g => g.health === 'faulted');
     const health = allHealthy ? 'healthy' : anyFaulted ? 'faulted' : 'degraded';
     dot.className = 'merllm-dot ' + health;
-    const queue = d.queue?.total ?? 0;
-    label.textContent = 'merLLM' + (queue > 0 ? ` (${queue})` : '');
+    const queued   = d.queue?.total ?? 0;
+    const inflight = d.queue?.in_flight ?? 0;
+    const active   = queued + inflight;
+    label.textContent = 'merLLM' + (active > 0 ? ` (${active})` : '');
     label.title = `Routing: ${d.routing || 'round_robin'}` + (d.warnings?.length ? '\n⚠ ' + d.warnings.join('\n⚠ ') : '');
     if (d.warnings?.length) {
       dot.style.boxShadow = '0 0 0 2px rgba(210,153,34,.4)';
