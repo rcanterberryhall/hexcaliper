@@ -292,7 +292,14 @@ async def extract_chunk(
         content = resp.json()["message"]["content"]
         return _parse_response(content)
     except Exception as exc:
-        logger.warning("extractor: extract_chunk failed (%s)", exc)
+        # Log the exception *type* as well as its str() — several httpx errors
+        # (ReadTimeout, RemoteProtocolError, ConnectError) have empty __str__,
+        # which made earlier failures invisible in the logs.
+        logger.warning(
+            "extractor: extract_chunk failed (%s: %s)",
+            type(exc).__name__,
+            exc or "<no message>",
+        )
         return ExtractionResult()
 
 
