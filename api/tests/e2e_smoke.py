@@ -36,8 +36,12 @@ def _check(name, condition, detail=""):
 
 
 def _status_check(name, r, expected):
-    got = r.status_code if r else "no response"
-    _check(name, r and r.status_code == expected,
+    # Use ``is not None`` rather than truthiness: ``bool(requests.Response)``
+    # delegates to ``.ok``, which is False for any 4xx/5xx status. Truthiness
+    # therefore mislabels a correct 403/422 error response as "no response"
+    # and fails the check for the opposite of the real reason.
+    got = r.status_code if r is not None else "no response"
+    _check(name, r is not None and r.status_code == expected,
            f"expected {expected}, got {got}")
 
 
