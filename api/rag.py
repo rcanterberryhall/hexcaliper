@@ -234,10 +234,14 @@ async def ingest(
 
     if not skip_concepts:
         # Extract concepts/entities per chunk and index as graph hub nodes.
-        # Failure is non-fatal — each chunk is independently fault-tolerant.
-        for i, chunk in enumerate(chunks):
-            result = await extractor.extract_chunk(chunk, doc_type=doc_type,
-                                                   learned_vocab=learned_vocab)
+        # Routes through merLLM's durable batch queue (hexcaliper#29) so a
+        # mid-ingest merLLM restart no longer silently drops graph edges.
+        # Per-chunk failure is non-fatal — each result is returned as an
+        # empty ``ExtractionResult`` in its slot.
+        results = await extractor.extract_chunks_batch(
+            chunks, doc_type=doc_type, learned_vocab=learned_vocab,
+        )
+        for i, result in enumerate(results):
             if not result.is_empty():
                 graph.index_chunk_concepts(
                     chunk_ids[i],
@@ -299,16 +303,16 @@ async def index_concepts_for_doc(
     with db.lock:
         learned_vocab = db.list_concept_vocab(vocab_scope_types, vocab_scope_ids)
 
+    # Route bulk extraction through merLLM's durable batch queue so a restart
+    # mid-ingest (power outage, code redeploy) no longer silently loses graph
+    # edges for half the document (hexcaliper#29). Per-chunk failure is
+    # non-fatal: the extractor returns an empty ``ExtractionResult`` in that
+    # slot and the loop just skips it.
+    results = await extractor.extract_chunks_batch(
+        chunks, doc_type=doc_type, learned_vocab=learned_vocab,
+    )
     indexed = 0
-    for i, chunk in enumerate(chunks):
-        try:
-            result = await extractor.extract_chunk(
-                chunk, doc_type=doc_type, learned_vocab=learned_vocab,
-            )
-        except Exception as exc:
-            log.warning("index_concepts_for_doc: chunk %d of %s failed: %s",
-                        i, doc_id, exc)
-            continue
+    for i, result in enumerate(results):
         if not result.is_empty():
             graph.index_chunk_concepts(
                 chunk_ids[i],

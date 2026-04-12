@@ -27,6 +27,7 @@ Configuration
     EXTRACT_TIMEOUT — HTTP timeout for extraction calls (default: 120 s).
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -43,6 +44,19 @@ logger = logging.getLogger(__name__)
 # Extraction quality scales strongly with model size — 30B+ recommended.
 # EXTRACT_MODEL env var takes priority; otherwise uses ANALYSIS_MODEL (settable at runtime).
 EXTRACT_TIMEOUT = float(config._get("EXTRACT_TIMEOUT_SECONDS", "120"))
+
+# ── Batch submission config ───────────────────────────────────────────────────
+# Bulk extraction routes through merLLM's SQLite-backed batch queue instead of
+# the in-memory proxy path (hexcaliper#29). merLLM re-enqueues orphaned jobs on
+# restart, so a mid-ingest power outage or code-change redeploy no longer
+# silently drops graph edges for half a document.
+BATCH_SUBMIT_TIMEOUT = float(config._get("EXTRACT_BATCH_SUBMIT_TIMEOUT", "15"))
+BATCH_POLL_INTERVAL  = float(config._get("EXTRACT_BATCH_POLL_INTERVAL", "3"))
+# Overall wall-clock cap per chunk while polling for a result. qwen3:32b on a
+# P40 returns in well under a minute at BACKGROUND priority when the queue is
+# warm; 15 min is a generous ceiling that tolerates queue pile-ups without
+# letting a runaway poll leak forever.
+BATCH_POLL_MAX_SECONDS = float(config._get("EXTRACT_BATCH_POLL_MAX_SECONDS", "900"))
 
 
 def _extract_model() -> str:
@@ -309,6 +323,138 @@ async def extract_chunk(
         return ExtractionResult()
 
 
+async def _submit_extract_batch_job(
+    client: httpx.AsyncClient,
+    prompt: str,
+    model: str,
+) -> str | None:
+    """
+    Submit a single extraction prompt to merLLM's ``/api/batch/submit``.
+
+    Returns the merLLM job ID on success, or None on submission failure.
+    ``options`` mirrors what merLLM's batch runner auto-fills on the proxy
+    path — we specify them explicitly so the batch runner's defensive
+    defaults do not drift from what the extractor actually asked for.
+    """
+    try:
+        resp = await client.post(
+            f"{config.MERLLM_URL}/api/batch/submit",
+            json={
+                "source_app": "lancellmot",
+                "prompt":     prompt,
+                "model":      model,
+                "options": {
+                    "think":       False,
+                    "num_predict": 384,
+                    "num_ctx":     8192,
+                    "temperature": 0.1,
+                },
+            },
+            timeout=BATCH_SUBMIT_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return resp.json().get("id")
+    except Exception as exc:
+        logger.warning(
+            "extractor: batch submit failed (%s: %s)",
+            type(exc).__name__, exc or "<no message>",
+        )
+        return None
+
+
+async def _poll_extract_batch_job(
+    client: httpx.AsyncClient,
+    job_id: str,
+) -> str | None:
+    """
+    Poll ``/api/batch/results/{job_id}`` until the job finishes.
+
+    Returns the completed response text on success. Returns None if the job
+    fails, disappears, or does not complete within BATCH_POLL_MAX_SECONDS —
+    the extractor treats every "no result" case as a non-fatal empty
+    extraction, same as the pre-migration sync path.
+
+    Status handling mirrors squire's reanalyze poller (parsival/api/
+    orchestrator.py::_poll_batch_once):
+      200            — completed; ``result`` field has the response text
+      409 queued/running — still in merLLM's queue; keep polling
+      409 failed     — merLLM gave up; treat as empty extraction
+      404            — job unknown to merLLM (DB wipe, race); give up
+    """
+    deadline = asyncio.get_event_loop().time() + BATCH_POLL_MAX_SECONDS
+    while asyncio.get_event_loop().time() < deadline:
+        try:
+            resp = await client.get(
+                f"{config.MERLLM_URL}/api/batch/results/{job_id}",
+                timeout=BATCH_SUBMIT_TIMEOUT,
+            )
+        except Exception as exc:
+            logger.warning(
+                "extractor: batch poll %s failed (%s: %s) — retrying",
+                job_id[:8], type(exc).__name__, exc or "<no message>",
+            )
+            await asyncio.sleep(BATCH_POLL_INTERVAL)
+            continue
+
+        if resp.status_code == 200:
+            return resp.json().get("result", "")
+
+        if resp.status_code == 404:
+            logger.warning("extractor: batch job %s not found in merLLM", job_id[:8])
+            return None
+
+        if resp.status_code == 409:
+            detail = ""
+            try:
+                detail = resp.json().get("detail", "")
+            except Exception:
+                pass
+            if "failed" in detail:
+                logger.warning("extractor: batch job %s failed in merLLM", job_id[:8])
+                return None
+            # queued or running — keep waiting.
+            await asyncio.sleep(BATCH_POLL_INTERVAL)
+            continue
+
+        # Any other status: log and retry briefly.
+        logger.warning(
+            "extractor: batch poll %s got %d — retrying",
+            job_id[:8], resp.status_code,
+        )
+        await asyncio.sleep(BATCH_POLL_INTERVAL)
+
+    logger.warning(
+        "extractor: batch job %s still not complete after %.0fs — giving up",
+        job_id[:8], BATCH_POLL_MAX_SECONDS,
+    )
+    return None
+
+
+async def _extract_one_via_batch(
+    client: httpx.AsyncClient,
+    chunk: str,
+    system_prompt: str,
+    doc_type: str,
+    model: str,
+) -> ExtractionResult:
+    """Submit one chunk as a batch job and parse its eventual result."""
+    # merLLM's ``/api/batch/submit`` runs the job against ``/api/generate``,
+    # which takes a single prompt string. Flatten system+user into one prompt
+    # with a separator the model can distinguish.
+    user_prompt = _build_user_prompt(chunk, doc_type)
+    prompt = f"{system_prompt}\n\n{user_prompt}"
+
+    job_id = await _submit_extract_batch_job(client, prompt, model)
+    if not job_id:
+        return ExtractionResult()
+
+    response_text = await _poll_extract_batch_job(client, job_id)
+    if not response_text:
+        return ExtractionResult()
+
+    return _parse_response(response_text)
+
+
 async def extract_chunks_batch(
     chunks: list[str],
     doc_type: str = "",
@@ -316,21 +462,59 @@ async def extract_chunks_batch(
     learned_vocab: list[str] | None = None,
 ) -> list[ExtractionResult]:
     """
-    Extract metadata for a list of chunks sequentially.
+    Extract metadata for a list of chunks via merLLM's durable batch queue.
 
-    Sequential rather than concurrent to avoid overloading a single Ollama
-    instance.  Each call is independently fault-tolerant.
+    Every chunk is submitted as a ``/api/batch/submit`` job, which merLLM
+    persists in its SQLite ``batch_jobs`` table. Jobs survive merLLM
+    restarts (power outage, code redeploy) because merLLM's
+    ``requeue_orphaned_jobs`` path resets them to ``queued`` at startup —
+    the pre-migration sync ``/api/chat`` path silently lost every in-flight
+    chunk when merLLM was restarted. See hexcaliper#29 for the incident.
+
+    Submission runs in a single async session, and polls run concurrently
+    via ``asyncio.gather``: we pay one round-trip per chunk to submit, then
+    wait for results in parallel. merLLM itself serialises execution across
+    the BACKGROUND bucket, so concurrent polls do not stress the GPU — they
+    just mean we notice each completion as soon as it lands.
+
+    Per-chunk failure (submit error, poll timeout, merLLM-reported failure,
+    JSON parse error) is non-fatal and yields an empty ``ExtractionResult``
+    in that slot — same contract as the pre-migration path.
 
     :param chunks:        List of chunk texts.
-    :param doc_type:      Document type hint passed to each ``extract_chunk`` call.
-    :param model:         Ollama model override.
+    :param doc_type:      Document type hint included in every chunk's prompt.
+    :param model:         Ollama model override; defaults to ``EXTRACT_MODEL``.
     :param learned_vocab: Accumulated concept vocabulary from the graph DB;
                           merged with the seeded vocab in the prompt.
-    :return:              List of ``ExtractionResult`` objects, one per chunk.
+    :return:              ``ExtractionResult`` list, one per input chunk, in
+                          the same order.
     """
-    results = []
-    for chunk in chunks:
-        result = await extract_chunk(chunk, doc_type=doc_type, model=model,
-                                     learned_vocab=learned_vocab)
-        results.append(result)
-    return results
+    if not chunks:
+        return []
+
+    m = model or _extract_model()
+    system_prompt = _build_system_prompt(learned_vocab)
+
+    # One httpx session for submit + all polls — cheaper than reopening a
+    # client per chunk, and still fully async.
+    async with httpx.AsyncClient() as client:
+        tasks = [
+            _extract_one_via_batch(client, chunk, system_prompt, doc_type, m)
+            for chunk in chunks
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # gather with return_exceptions keeps the slot order intact even if one
+    # coroutine blew up — map any exception to an empty result so callers
+    # get len(results) == len(chunks) unconditionally.
+    normalised: list[ExtractionResult] = []
+    for idx, r in enumerate(results):
+        if isinstance(r, Exception):
+            logger.warning(
+                "extractor: batch chunk %d raised (%s: %s)",
+                idx, type(r).__name__, r or "<no message>",
+            )
+            normalised.append(ExtractionResult())
+        else:
+            normalised.append(r)
+    return normalised

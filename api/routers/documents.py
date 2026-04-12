@@ -460,10 +460,18 @@ async def reindex_documents(
         with db.lock:
             learned_vocab = db.list_concept_vocab(vocab_scope_types, vocab_scope_ids)
 
-        for chunk_id, chunk_text in rag.get_doc_chunks(doc_id):
-            result = await extractor.extract_chunk(
-                chunk_text, doc_type=doc_type, learned_vocab=learned_vocab
-            )
+        # Collect all chunks for the doc, then route the extraction through
+        # merLLM's durable batch queue (hexcaliper#29). A restart mid-reindex
+        # used to silently truncate the concept graph for every document
+        # still being processed — the batch path persists each chunk in
+        # merLLM's SQLite so it resumes after restart instead.
+        chunk_pairs       = list(rag.get_doc_chunks(doc_id))
+        chunk_ids_for_doc = [cid for cid, _ in chunk_pairs]
+        chunk_texts       = [text for _, text in chunk_pairs]
+        results           = await extractor.extract_chunks_batch(
+            chunk_texts, doc_type=doc_type, learned_vocab=learned_vocab,
+        )
+        for chunk_id, result in zip(chunk_ids_for_doc, results):
             if not result.is_empty():
                 graph.index_chunk_concepts(
                     chunk_id,
