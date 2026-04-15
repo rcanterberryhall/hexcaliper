@@ -1536,6 +1536,7 @@ const wbManageBtn    = document.getElementById('wb-manage-btn');
 const wbOpenChatBtn  = document.getElementById('wb-open-chat-btn');
 const wbTypeFilter   = document.getElementById('wb-type-filter');
 const wbUploadType   = document.getElementById('wb-upload-type');
+const wbUploadClass  = document.getElementById('wb-upload-classification');
 const wbDocUpload    = document.getElementById('wb-doc-upload');
 const wbUploadStatus = document.getElementById('wb-upload-status');
 const wbDocTbody     = document.getElementById('wb-doc-tbody');
@@ -1604,6 +1605,10 @@ async function setWbScope(scope) {
   wbScope = scope;
   wbOpenChatBtn.disabled = scope.type !== 'project';
   document.getElementById('wb-scope-label').textContent = scope.label;
+  const restricted = scope.type === 'client' || scope.type === 'project';
+  wbUploadClass.value = restricted ? 'client' : 'client';
+  wbUploadClass.disabled = restricted;
+  wbUploadClass.querySelector('option[value="public"]').disabled = restricted;
   renderWbScopeList();
   await loadWbDocs();
 }
@@ -1956,7 +1961,8 @@ wbDocUpload.addEventListener('change', async () => {
   if (!files.length) return;
   wbDocUpload.value = '';
 
-  const docType = wbUploadType.value;
+  const docType        = wbUploadType.value;
+  const classification = wbUploadClass.value;
   const total   = files.length;
   let   done    = 0;
   let   failed  = 0;
@@ -1971,6 +1977,7 @@ wbDocUpload.addEventListener('change', async () => {
     const fd = new FormData();
     fd.append('file', file);
     fd.append('doc_type', docType);
+    fd.append('classification', classification);
     fd.append('defer_index', 'true');
     if (wbScope.type === 'project' && wbScope.projectId) fd.append('project_id', wbScope.projectId);
     else if (wbScope.type === 'client' && wbScope.clientId) fd.append('client_id', wbScope.clientId);
