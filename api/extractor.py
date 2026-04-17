@@ -377,76 +377,93 @@ async def _submit_extract_batch_job(
         return None
 
 
-async def _poll_extract_batch_job(
-    client: httpx.AsyncClient,
-    job_id: str,
-) -> str | None:
+class _BatchPoller:
     """
-    Poll ``/api/batch/results/{job_id}`` until the job finishes.
+    Shared batch-job poller for one ``extract_chunks_batch`` run.
 
-    Returns the completed response text on success. Returns None if the job
-    fails, disappears, or does not complete within BATCH_POLL_MAX_SECONDS —
-    the extractor treats every "no result" case as a non-fatal empty
-    extraction, same as the pre-migration sync path.
+    One task issues ``GET /api/batch/status`` every BATCH_POLL_INTERVAL and
+    resolves per-job futures as each job reaches a terminal state. Replaces
+    the prior per-chunk poll loop that issued N concurrent
+    ``GET /api/batch/results/{id}`` calls — on a 100-chunk ingest merLLM
+    saw ~100 requests every 3 s, almost all returning 409 "still running"
+    (#40).
 
-    Status handling mirrors squire's reanalyze poller (parsival/api/
-    orchestrator.py::_poll_batch_once):
-      200            — completed; ``result`` field has the response text
-      409 queued/running — still in merLLM's queue; keep polling
-      409 failed     — merLLM gave up; treat as empty extraction
-      404            — job unknown to merLLM (DB wipe, race); give up
+    The status endpoint already contains ``result`` inline for completed
+    jobs, so no follow-up per-job GET is needed. It returns the 200
+    most-recent jobs (ordered by submitted_at DESC), which covers a typical
+    single-document extraction. If a job we just submitted isn't in the
+    response yet (rare — only possible if 200+ newer jobs landed in the
+    window), we simply keep waiting; the per-chunk BATCH_POLL_MAX_SECONDS
+    deadline is still the safety net.
     """
-    deadline = asyncio.get_event_loop().time() + BATCH_POLL_MAX_SECONDS
-    while asyncio.get_event_loop().time() < deadline:
-        try:
-            resp = await client.get(
-                f"{config.MERLLM_URL}/api/batch/results/{job_id}",
-                timeout=BATCH_SUBMIT_TIMEOUT,
-            )
-        except Exception as exc:
-            logger.warning(
-                "extractor: batch poll %s failed (%s: %s) — retrying",
-                job_id[:8], type(exc).__name__, exc or "<no message>",
-            )
+
+    def __init__(self, client: httpx.AsyncClient):
+        self._client  = client
+        self._pending: dict[str, asyncio.Future[str | None]] = {}
+        self._stopped = False
+
+    def register(self, job_id: str) -> asyncio.Future[str | None]:
+        fut = asyncio.get_running_loop().create_future()
+        self._pending[job_id] = fut
+        return fut
+
+    def unregister(self, job_id: str) -> None:
+        self._pending.pop(job_id, None)
+
+    def stop(self) -> None:
+        self._stopped = True
+
+    async def run(self) -> None:
+        while not self._stopped:
             await asyncio.sleep(BATCH_POLL_INTERVAL)
-            continue
+            if self._stopped:
+                break
+            if not self._pending:
+                continue
 
-        if resp.status_code == 200:
-            return resp.json().get("result", "")
-
-        if resp.status_code == 404:
-            logger.warning("extractor: batch job %s not found in merLLM", job_id[:8])
-            return None
-
-        if resp.status_code == 409:
-            detail = ""
             try:
-                detail = resp.json().get("detail", "")
-            except Exception:
-                pass
-            if "failed" in detail:
-                logger.warning("extractor: batch job %s failed in merLLM", job_id[:8])
-                return None
-            # queued or running — keep waiting.
-            await asyncio.sleep(BATCH_POLL_INTERVAL)
-            continue
+                resp = await self._client.get(
+                    f"{config.MERLLM_URL}/api/batch/status",
+                    timeout=BATCH_SUBMIT_TIMEOUT,
+                )
+                resp.raise_for_status()
+                jobs = resp.json()
+            except Exception as exc:
+                logger.warning(
+                    "extractor: shared batch poll failed (%s: %s) — retrying",
+                    type(exc).__name__, exc or "<no message>",
+                )
+                continue
 
-        # Any other status: log and retry briefly.
-        logger.warning(
-            "extractor: batch poll %s got %d — retrying",
-            job_id[:8], resp.status_code,
-        )
-        await asyncio.sleep(BATCH_POLL_INTERVAL)
+            by_id = {j.get("id"): j for j in jobs if j.get("id")}
+            for job_id in list(self._pending.keys()):
+                rec = by_id.get(job_id)
+                if rec is None:
+                    # Job not in the 200-most-recent window yet (or bumped
+                    # out by a very busy queue). Keep waiting — the
+                    # per-chunk deadline will eventually give up.
+                    continue
+                fut = self._pending.get(job_id)
+                if fut is None or fut.done():
+                    continue
 
-    logger.warning(
-        "extractor: batch job %s still not complete after %.0fs — giving up",
-        job_id[:8], BATCH_POLL_MAX_SECONDS,
-    )
-    return None
+                status = rec.get("status")
+                if status == "completed":
+                    fut.set_result(rec.get("result") or "")
+                    self._pending.pop(job_id, None)
+                elif status in ("failed", "cancelled"):
+                    logger.warning(
+                        "extractor: batch job %s reached terminal state %s",
+                        job_id[:8], status,
+                    )
+                    fut.set_result(None)
+                    self._pending.pop(job_id, None)
+                # else queued / running — keep waiting.
 
 
 async def _extract_one_via_batch(
     client: httpx.AsyncClient,
+    poller: "_BatchPoller",
     chunk: str,
     system_prompt: str,
     doc_type: str,
@@ -463,7 +480,17 @@ async def _extract_one_via_batch(
     if not job_id:
         return ExtractionResult()
 
-    response_text = await _poll_extract_batch_job(client, job_id)
+    fut = poller.register(job_id)
+    try:
+        response_text = await asyncio.wait_for(fut, BATCH_POLL_MAX_SECONDS)
+    except asyncio.TimeoutError:
+        poller.unregister(job_id)
+        logger.warning(
+            "extractor: batch job %s still not complete after %.0fs — giving up",
+            job_id[:8], BATCH_POLL_MAX_SECONDS,
+        )
+        return ExtractionResult()
+
     if not response_text:
         return ExtractionResult()
 
@@ -486,11 +513,11 @@ async def extract_chunks_batch(
     the pre-migration sync ``/api/chat`` path silently lost every in-flight
     chunk when merLLM was restarted. See hexcaliper#29 for the incident.
 
-    Submission runs in a single async session, and polls run concurrently
-    via ``asyncio.gather``: we pay one round-trip per chunk to submit, then
-    wait for results in parallel. merLLM itself serialises execution across
-    the BACKGROUND bucket, so concurrent polls do not stress the GPU — they
-    just mean we notice each completion as soon as it lands.
+    Submission runs in a single async session. A single shared poller task
+    (``_BatchPoller``) issues one ``GET /api/batch/status`` per poll
+    interval and resolves per-chunk futures as jobs reach terminal states —
+    O(1) request rate regardless of chunk concurrency (#40). merLLM itself
+    serialises execution across the BACKGROUND bucket.
 
     Per-chunk failure (submit error, poll timeout, merLLM-reported failure,
     JSON parse error) is non-fatal and yields an empty ``ExtractionResult``
@@ -510,14 +537,20 @@ async def extract_chunks_batch(
     m = model or _extract_model()
     system_prompt = _build_system_prompt(learned_vocab)
 
-    # One httpx session for submit + all polls — cheaper than reopening a
-    # client per chunk, and still fully async.
+    # One httpx session for submit + the shared status poll — cheaper than
+    # reopening a client per chunk, and still fully async.
     async with httpx.AsyncClient() as client:
-        tasks = [
-            _extract_one_via_batch(client, chunk, system_prompt, doc_type, m)
-            for chunk in chunks
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        poller = _BatchPoller(client)
+        poller_task = asyncio.create_task(poller.run())
+        try:
+            tasks = [
+                _extract_one_via_batch(client, poller, chunk, system_prompt, doc_type, m)
+                for chunk in chunks
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            poller.stop()
+            await poller_task
 
     # gather with return_exceptions keeps the slot order intact even if one
     # coroutine blew up — map any exception to an empty result so callers
