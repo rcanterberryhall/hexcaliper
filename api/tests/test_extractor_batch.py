@@ -135,7 +135,7 @@ async def test_extract_chunks_batch_flattens_messages_into_single_prompt(monkeyp
     # Prompt must contain both the system-level instructions (vocabulary,
     # schema) and the user-level chunk text.
     prompt = submitted[0]
-    assert "functional-safety document analyst" in prompt
+    assert "controls-engineering document analyst with functional-safety depth" in prompt
     assert "tell me about SIL 2" in prompt
 
 
