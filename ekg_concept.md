@@ -82,14 +82,16 @@ Ingestion is not a one-time event. As a project progresses, artifacts revise: dr
 
 Cross-layer edges encode the standards-mandated relationships between artifact contents. Examples:
 
-- `verified_by` (justification → procedural): a requirement is verified by a procedure as a whole, not by individual steps within it.
-- `mitigates` (justification → justification): a SIF mitigates a hazard.
-- `produces_reaction` (justification → justification): an FMEA failure mode produces a system reaction.
-- `tested_by` (justification → procedural): a system reaction is validated by a procedure step injecting the failure and observing the reaction.
-- `reads_tag`, `writes_tag` (logical → shared): a code statement reads or writes a signal.
-- `implements_signal` (system → shared): a device carries a signal.
-- `exercises_device` (procedural → shared): a procedure step touches a device, contributing to procedure-level coverage.
-- `requires_state`, `establishes_state` (procedural → shared): a step depends on or produces a system state.
+- `mitigated_by` (justification → justification): an HA Entry's measure is implemented by an SRS Entry. (ISO 12100 §6.3 risk reduction.)
+- `verified_by` (justification → procedural): an SRS Entry is verified by a SAT. (ISO 13849-1:2015 §8 validation.)
+- `implemented_by` (justification → shared): an SRS Entry's subsystem chain references the input, logic, and output devices that realise the safety function. (ISO 13849-1:2015 §4.5.)
+- `references_device` (justification → shared): an FMEA Entry analyses a specific device.
+- `tested_by` (justification → procedural): an FMEA Entry's Tests column references the SATs that address its failure mode. (ISO 13849-2:2012 fault list validation.)
+- `addresses` (procedural → justification): inverse of `tested_by`; a SAT addresses an FMEA Entry.
+- `exercises_device` (procedural → shared): a SAT exercises a device named in its `reference_designator` field.
+- `reads_tag`, `writes_tag` (logical → shared): a routine reads or writes a signal. (IEC 61131-3.)
+- `mapped_to` (shared → shared): a PLC tag is mapped to a device's terminal.
+- `shown_on`, `contained_in`, `connected_to` (system → system): a device appears on a drawing sheet, sits inside a panel, or is connected to another device. (IEC 81346-2 reference designation.)
 
 A SIF spine is the set of devices, wiring, and logic that together implement a single safety instrumented function. It is the physical and logical path from the field sensor through the logic solver to the final element. Every device on the spine participates in the safety function, and every device on the spine must be individually verified.
 
@@ -102,17 +104,16 @@ flowchart LR
     H["<b>HA</b><br/>HA-PRES-001<br/>overpressure"]
     R["<b>SRS</b><br/>SF-PRES-001<br/>SIL 3 trip"]
     Code["<b>PLC code</b><br/>R_TripLogic<br/>writes TRIP_CMD"]
-    SAT["<b>SAT 201</b><br/>full procedure"]
-    Step["<b>Step 201-007</b><br/>injects 2oo3 trip"]
+    SAT["<b>SAT 201</b>"]
     Tag["<b>LT-2105</b><br/>shared device"]
     Drawing["<b>Drawing</b><br/>Sheet 301"]
 
-    H -- "mitigates" --> R
+    H -- "mitigated_by" --> R
     R -- "verified_by" --> SAT
-    SAT -- "contains" --> Step
-    Step -- "exercises_device" --> Tag
+    R -- "implemented_by" --> Tag
+    SAT -- "exercises_device" --> Tag
     Code -- "reads_tag" --> Tag
-    Drawing -- "implements_signal" --> Tag
+    Tag -- "shown_on" --> Drawing
 
     style Tag fill:#F1EFE8,stroke:#5F5E5A,color:#2C2C2A
     style H fill:#EEEDFE,stroke:#534AB7,color:#26215C
@@ -120,7 +121,6 @@ flowchart LR
     style Code fill:#E1F5EE,stroke:#0F6E56,color:#04342C
     style Drawing fill:#FAECE7,stroke:#993C1D,color:#4A1B0C
     style SAT fill:#FBEAF0,stroke:#993556,color:#4B1528
-    style Step fill:#FBEAF0,stroke:#993556,color:#4B1528
 ```
 
 ### 6.1 What the Graph View Provides
@@ -129,9 +129,11 @@ Representing the verification effort as a typed graph, rather than as a list of 
 
 #### Redundancy Detection
 
-When multiple SATs converge on the same physical action, the graph surfaces the convergence for review. Without the graph, this is invisible at the test-list level: each SAT looks complete on its own, with its own FMEA reference and its own observed reaction. With the graph, the convergence is structural: N SATs with `executes_action` edges to one Action node, and the engineer can see at a glance whether the tests are genuinely distinct (different FMEA modes routed through structurally different action paths) or duplicates wearing different hats. The decision (consolidate the SATs into one or differentiate them by a more specific physical action) is the engineer's. The graph's job is to make the question askable.
+When multiple SATs target the same device with similar fault-injection descriptions, the graph surfaces them for engineer review. The query is a candidate-finder, not a deterministic matcher: it groups SATs by `reference_designator.id` and surfaces groups whose `induced_fault` text overlaps. Identical descriptive prose can still hide different terminals or conductors, and different prose can describe the same physical action — so the engineer's judgment closes each case. Do the tests perform the same physical fault injection (consolidate into one SAT covering multiple failure modes), or do they exercise different actions on the same device that happened to be worded similarly (differentiate the descriptions)?
 
-**Figure 3.** Multiple SATs converging on a shared action and reaction.
+Without the graph, the question doesn't get asked at the test-list level: each SAT looks complete on its own with its own FMEA reference, and the convergence opportunities go unsurfaced.
+
+**Figure 3.** Convergence candidate: four SATs targeting the same device with overlapping fault-injection text, flagged for engineer review.
 
 ```mermaid
 flowchart LR
@@ -140,42 +142,35 @@ flowchart LR
     FM3["FMEA<br/>wire short<br/>to ground"]
     FM4["FMEA<br/>PLC input fail"]
 
-    SAT1["SAT-PSU.1"]
-    SAT2["SAT-PSU.2"]
-    SAT3["SAT-PSU.3"]
-    SAT4["SAT-PSU.4"]
+    SAT1["<b>SAT-PSU.1</b><br/>device: +PSU-1<br/>induced_fault:<br/>pull wire 24V-PSU-1"]
+    SAT2["<b>SAT-PSU.2</b><br/>device: +PSU-1<br/>induced_fault:<br/>pull wire 24V-PSU-1"]
+    SAT3["<b>SAT-PSU.3</b><br/>device: +PSU-1<br/>induced_fault:<br/>pull wire 24V-PSU-1"]
+    SAT4["<b>SAT-PSU.4</b><br/>device: +PSU-1<br/>induced_fault:<br/>pull wire 24V-PSU-1"]
 
-    Action["<b>Action</b><br/>pull wire<br/>24V-PSU-1"]
-    RX["<b>Reaction</b><br/>PSU fault alarm<br/>at PLC input"]
+    Review(["<b>Engineer review</b><br/>4 SATs share device<br/>+ overlapping induced_fault<br/>→ same fault injection method?<br/>consolidate or differentiate"])
 
-    FM1 -. "addressed by" .-> SAT1
-    FM2 -. "addressed by" .-> SAT2
-    FM3 -. "addressed by" .-> SAT3
-    FM4 -. "addressed by" .-> SAT4
+    FM1 -. "addresses" .-> SAT1
+    FM2 -. "addresses" .-> SAT2
+    FM3 -. "addresses" .-> SAT3
+    FM4 -. "addresses" .-> SAT4
 
-    SAT1 -- "executes_action" --> Action
-    SAT2 -- "executes_action" --> Action
-    SAT3 -- "executes_action" --> Action
-    SAT4 -- "executes_action" --> Action
-
-    SAT1 -- "tests_reaction" --> RX
-    SAT2 -- "tests_reaction" --> RX
-    SAT3 -- "tests_reaction" --> RX
-    SAT4 -- "tests_reaction" --> RX
+    SAT1 -.-> Review
+    SAT2 -.-> Review
+    SAT3 -.-> Review
+    SAT4 -.-> Review
 
     style FM1 fill:#EEEDFE,stroke:#534AB7,color:#26215C
     style FM2 fill:#EEEDFE,stroke:#534AB7,color:#26215C
     style FM3 fill:#EEEDFE,stroke:#534AB7,color:#26215C
     style FM4 fill:#EEEDFE,stroke:#534AB7,color:#26215C
-    style RX fill:#EEEDFE,stroke:#534AB7,color:#26215C
     style SAT1 fill:#FBEAF0,stroke:#993556,color:#4B1528
     style SAT2 fill:#FBEAF0,stroke:#993556,color:#4B1528
     style SAT3 fill:#FBEAF0,stroke:#993556,color:#4B1528
     style SAT4 fill:#FBEAF0,stroke:#993556,color:#4B1528
-    style Action fill:#FBEAF0,stroke:#993556,color:#4B1528
+    style Review fill:#FAEEDA,stroke:#854F0B,color:#412402
 ```
 
-In Figure 3, four FMEA modes for a 24V power supply alarm (PSU failure, wire break, wire short, PLC input failure) are each addressed by their own SAT. All four SATs perform the same physical operation (pull the wire). The graph shows the four-into-one convergence on both the Action node and the Reaction node simultaneously. The schema flags it; the engineer reviews whether to consolidate or to differentiate by physical action. The fan-out is structurally identical across many situations: distributed E-stop stations, transmitter loops, signal paths feeding shared response chains, and the same query surfaces redundancy in all of them.
+In Figure 3, four FMEA failure modes for a 24V power supply (PSU failure, wire break, wire short, PLC input failure) are each addressed by their own SAT. All four SATs name the same device and use the same `induced_fault` text — at face value, the same physical action. The graph flags the group; the engineer evaluates. If pulling the same wire genuinely tests all four failure modes, the four SATs consolidate into one. If the failure modes require different fault-injection methods (different wires, different mechanisms) that were worded similarly by writing convention, the engineer rewrites the descriptions to make the actions structurally distinct and the SATs stay separate. The graph surfaces the question; the engineer answers it. The same candidate-finder pattern applies to distributed E-stop stations sharing stop-button-press text, transmitter loops sharing wire-short text, and signal paths feeding shared trip outputs.
 
 #### Coverage Gap Detection
 
@@ -193,22 +188,30 @@ flowchart LR
     SAT_d["SAT-DA.D<br/>ready state"]
     SAT_n["SAT-DA.N<br/>operator key"]
 
-    State["<b>State</b><br/>bit_DispatchAllowed"]
+    Devs["5 precondition<br/>Devices (sensors)"]
+    Tags["5 precondition<br/>Tags"]
+
+    Routine["<b>R_Permissive</b><br/>reads tags,<br/>writes bit"]
+
+    Bit["<b>Tag</b><br/>bit_DispatchAllowed"]
 
     SAT_force["SAT-DA.X<br/>force bit"]
-    RX["<b>Reaction</b><br/>dispatch enabled"]
 
-    SAT_a -- "clears_state" --> State
-    SAT_b -- "clears_state" --> State
-    SAT_c -- "clears_state" --> State
-    SAT_d -- "clears_state" --> State
-    SAT_n -- "clears_state" --> State
+    SAT_a -- "exercises_device" --> Devs
+    SAT_b -- "exercises_device" --> Devs
+    SAT_c -- "exercises_device" --> Devs
+    SAT_d -- "exercises_device" --> Devs
+    SAT_n -- "exercises_device" --> Devs
 
-    State -- "drives_reaction" --> RX
-    SAT_force -- "tests_reaction" --> RX
+    Devs -. "mapped_to" .-> Tags
+    Tags -. "read_by" .-> Routine
+    Routine -- "writes_tag" --> Bit
+    SAT_force -- "force-tests" --> Bit
 
-    style State fill:#E1F5EE,stroke:#0F6E56,color:#04342C
-    style RX fill:#EEEDFE,stroke:#534AB7,color:#26215C
+    style Bit fill:#F1EFE8,stroke:#5F5E5A,color:#2C2C2A
+    style Tags fill:#F1EFE8,stroke:#5F5E5A,color:#2C2C2A
+    style Routine fill:#E1F5EE,stroke:#0F6E56,color:#04342C
+    style Devs fill:#FAECE7,stroke:#993C1D,color:#4A1B0C
     style SAT_a fill:#FBEAF0,stroke:#993556,color:#4B1528
     style SAT_b fill:#FBEAF0,stroke:#993556,color:#4B1528
     style SAT_c fill:#FBEAF0,stroke:#993556,color:#4B1528
@@ -234,17 +237,19 @@ The operations described in section 6.1 (coverage gap detection, redundancy dete
 
 The traversal walks only valid nodes and edges. At each node it visits, the node evaluates its own validation rules (section 7.3). At each edge it crosses, the edge evaluates its own validity predicate (section 7.2). If a node fails any of its rules, or an edge is invalid, the traversal stops there. The point where the traversal halts is the finding.
 
-End-to-end validation of a verification claim means being able to traverse the graph from the justification-layer origin (a hazard, a failure mode, a requirement) all the way to the procedural-layer evidence (a SAT, a preventative maintenance procedure) on a path of exclusively valid nodes and edges. If the traversal completes, the claim is structurally supported. If it cannot complete, the claim is broken, and the engineer knows exactly where, because the traversal stopped at the node or edge that failed.
+End-to-end validation of a verification claim means being able to traverse the graph from the justification-layer origin (a hazard, a failure mode, a safety function) all the way to the procedural-layer evidence (a SAT, a preventative maintenance procedure) on a path of exclusively valid nodes and edges. If the traversal completes, the claim is structurally supported. If it cannot complete, the claim is broken, and the engineer knows exactly where, because the traversal stopped at the node or edge that failed.
 
-Coverage gap detection starts at a hazard node and walks depth-first along the typed edge pattern `mitigated_by → verified_by → exercises_device`. If a node along that path fails its validation rules (the SIF has no `verified_by` edge, or the SAT references a device that doesn't exist on a current drawing), the traversal halts and that failure is the finding. The FMEA chain works identically: start at a failure-mode node, walk `produces_reaction → tested_by`, halt on the first invalidity. Blast radius is depth-first search from a changed node, following all outgoing cross-layer edges, collecting every reachable node. Cascade is the same traversal triggered by the diff that ingestion produces.
+Two complementary validation mechanisms produce findings, and they are not interchangeable. **Node rule violations** (§7.3) are how the schema catches *missing required structure* — a rule on a node says "must have at least one `tested_by` edge" or "PL Achieved must meet PLr (ISO 13849-1:2015 §4.5.4)" or "post-measure risk level must be lower than initial risk level (ISO 12100 §6.3)," and a rule fails. Required edges that don't exist surface here, on the node whose rule required them. **Edge validity drift** (§7.2) is how the schema catches *existing edges that have gone stale* — a `verified_by` edge from an SRS Entry to a SAT was valid yesterday; today the SAT has been revised and no longer references the SRS Entry in its scope, so the edge's validity predicate now returns false. Together, the two mechanisms give the engineer a structurally complete picture: what the schema requires that isn't there (node rules), and what was there but is no longer current (edge validity).
 
-Redundancy detection is the one case that works in the opposite direction: not a traversal from a starting node but an inspection of incoming edges at a target node. When an Action node has multiple incoming `executes_action` edges, multiple SATs converge on the same physical operation. This is a lookup on the node's incoming adjacency list, not a search.
+Coverage gap detection starts at a hazard node and walks depth-first along the typed edge pattern `mitigated_by → verified_by → exercises_device`. If a node along that path fails its validation rules (the SRS Entry has no `verified_by` edge, or the SAT references a device that doesn't exist on a current drawing), the traversal halts and that failure is the finding. The FMEA chain works identically: start at an FMEA Entry, follow its `tested_by` edge to a SAT, and halt on the first invalidity. Blast radius is depth-first search from a changed node, following all outgoing cross-layer edges, collecting every reachable node. Cascade is the same traversal triggered by the diff that ingestion produces.
+
+Redundancy detection is the one case that works in the opposite direction: not a traversal from a starting node but a group-by query over SAT properties. Multiple SATs that share a `reference_designator` (Device) with overlapping `induced_fault` text converge on the same physical fault injection. The query groups SAT nodes by `(reference_designator.id, induced_fault)` and surfaces the groups for engineer review (§6.1).
 
 ### 7.2 Edge Validity
 
 Every edge has a binary state: valid or invalid. The state is computed from the current revision status of the artifacts the edge depends on. A `verified_by` edge from a requirement to a procedure is valid only if the requirement is current, the procedure has been ingested at its current revision, and the requirement is referenced in the procedure's verification scope with provenance. An invalid edge halts traversal just as an invalid node does. The traversal cannot cross it, and the edge becomes the finding. Edge validity catches drift: relationships that were valid and broke as artifacts revised.
 
-Figure 5 shows the two obligation chains side by side. On the hazard chain, HA-PRES-001 is mitigated by a SIF that is verified by a procedure. On the FMEA chain, failure mode FM-LT2105-FAULT produces a system reaction (force vote to trip) that is tested by a SAT step injecting the fault. HA-TEMP-001 has no mitigation; FM-PT3201-DRIFT has a documented reaction with no test exercising it. Both are structurally invalid at different points in their chains.
+Figure 5 shows the two obligation chains side by side, with two valid examples and two invalidities. On the hazard chain, HA-PRES-001 is mitigated by safety function SF-PRES-001 which is verified by a SAT — a complete path. On the FMEA chain, failure mode FM-LT2105-FAULT has a documented system reaction (process trip to safe state) and is tested by a SAT that addresses the failure mode — also complete. The two invalidities are both **node rule violations**: HA-TEMP-001 has no `mitigated_by` edge (HA Entry rule fails); FM-PT3201-DRIFT has no `tested_by` edge (FMEA-safety-subtype rule fails). Both findings sit on the node whose rule required the edge, not on a stale edge — neither path ever existed.
 
 **Figure 5.** Hazard chain and FMEA chain validity, showing valid and invalid examples side by side.
 
@@ -261,17 +266,13 @@ flowchart LR
     end
 
     subgraph FMEA["FMEA chain"]
-        FM1["<b>FM-LT2105-FAULT</b>"]
-        Rx1["Reaction:<br/>force vote to trip"]
-        Step1["SAT step 201-007<br/>injects fault"]
-        FM1 -- "produces_reaction" --> Rx1
-        Rx1 -- "tested_by" --> Step1
+        FM1["<b>FM-LT2105-FAULT</b><br/>system_reaction:<br/>process trip to safe state"]
+        SAT_FM1["SAT 201"]
+        FM1 -- "tested_by" --> SAT_FM1
 
-        FM2["<b>FM-PT3201-DRIFT</b>"]
-        Rx2["Reaction:<br/>diagnostic alarm"]
+        FM2["<b>FM-PT3201-DRIFT</b><br/>system_reaction:<br/>diagnostic alarm"]
         Missing(["no tested_by edge"])
-        FM2 -- "produces_reaction" --> Rx2
-        Rx2 -.-> Missing
+        FM2 -.-> Missing
     end
 
     style H1 fill:#EEEDFE,stroke:#534AB7,color:#26215C
@@ -279,10 +280,8 @@ flowchart LR
     style SAT1 fill:#FBEAF0,stroke:#993556,color:#4B1528
     style H2 fill:#FCEBEB,stroke:#A32D2D,color:#501313
     style FM1 fill:#EEEDFE,stroke:#534AB7,color:#26215C
-    style Rx1 fill:#EEEDFE,stroke:#534AB7,color:#26215C
-    style Step1 fill:#FBEAF0,stroke:#993556,color:#4B1528
+    style SAT_FM1 fill:#FBEAF0,stroke:#993556,color:#4B1528
     style FM2 fill:#EEEDFE,stroke:#534AB7,color:#26215C
-    style Rx2 fill:#EEEDFE,stroke:#534AB7,color:#26215C
     style Missing fill:#FCEBEB,stroke:#A32D2D,color:#501313
 ```
 
@@ -318,18 +317,20 @@ flowchart LR
 
 Every node in the graph has a type, and every type carries validation rules. A node is valid when all of its type's rules evaluate to true against the node's current edges, attributes, and the validity of its referenced nodes. The rules are propositional: each one is a statement that is either true or false given the current graph state, and they compose: a node with five rules is valid only when all five are satisfied.
 
-A SAT node illustrates how these rules build up. At minimum, a SAT must trace back to a justification (a functional requirement, a failure mode, an SRS entry, or some combination of the three). That is the first rule: does this SAT have at least one incoming edge from a justification-layer node? If the SAT references an SRS entry or an FMEA failure mode, a second rule applies: the SAT must follow the canonical fault test format, the nine-step lifecycle that walks through initial conditions, fault injection, observation, reset, and return to normal. A SAT that traces to a functional requirement but not to an SRS or FMEA entry may have a different structural template; the type of justification determines which format rules apply. A third rule checks the SAT's equipment references: every device tag named in the SAT must resolve to a valid node in the system layer (a device that exists on a current drawing, at the designated terminal, with the correct signal type). If any referenced device fails its own validation, the SAT inherits that invalidity.
+A SAT node illustrates how these rules build up. At minimum, a SAT must reference at least one justification-layer node — an FMEA Entry, an SRS Entry, or a functional requirement. That is the first rule. If the SAT addresses an FMEA Entry of safety subtype, a second rule applies: the SAT must conform to the canonical fault test lifecycle for its (fault_class, reaction_class) combination — verification of normal state, fault induction, verification of the safe state, attempted reset and restart while faulted, fault removal, and verification of return to normal. The lifecycle's exact step count varies with the combination (the persistent-fault-to-safe-state procedure is 22 steps; transient-fault variants add steps to verify the system stays latched after the fault clears). A third rule checks the SAT's equipment references: the `reference_designator` must resolve to a valid Device node, and every PLC tag named in `system_reaction_tags` and `monitored_tags` must resolve to a valid Tag node in the shared layer.
 
 The rules for a SAT node, then, are:
 
-- The SAT must reference at least one justification-layer node (functional requirement, FMEA failure mode, or SRS entry).
-- If the SAT references an SRS entry or FMEA failure mode, it must conform to the canonical fault test template.
-- Every equipment tag referenced in the SAT must resolve to a valid device node in the system layer.
-- The SAT must have exactly one `tests_reaction` edge identifying the system reaction it validates.
+- The SAT must reference at least one justification-layer node — FMEA Entry, SRS Entry, or functional requirement. (ISO 13849-1:2015 §8; ISO 13849-2:2012.)
+- If the SAT addresses a safety-subtype FMEA Entry, it must conform to the canonical fault test lifecycle template for its (fault_class, reaction_class) combination. (ISO 13849-2:2012.)
+- The `reference_designator` must resolve to a valid Device node.
+- Every PLC tag named in `system_reaction_tags` and `monitored_tags` must resolve to a valid Tag node.
+- The `induced_fault` must be non-empty for FMEA-driven SATs.
+- The `hmi_message` must match the alarm config entry referenced in the SAT's verify-alarm step.
 
-Each rule is independently evaluable and each produces a true/false result. The SAT node is valid when the conjunction of all its rules is true. A rule that fails is a finding, and the finding carries the specific rule that failed, so the engineer knows whether the problem is a missing justification reference, a format violation, or a broken equipment tag.
+Each rule is independently evaluable and each produces a true/false result. The SAT node is valid when the conjunction of all its rules is true. A rule that fails is a finding, and the finding carries the specific rule that failed, so the engineer knows whether the problem is a missing justification reference, a procedure-template violation, a broken device or tag reference, or an HMI-message inconsistency.
 
-Other node types carry their own rule sets, and the same pattern of conditional rules applies. A hazard node must have a `mitigated_by` edge. That is the first rule. But the type of mitigation determines what further obligations follow. If the mitigation is a safety instrumented function, the hazard must also trace to an SRS entry specifying the function and to SATs verifying it. If the mitigation is a procedural control, the hazard must trace to the procedure that implements it. A mechanical safeguard may require only a design reference. The hazard node's rule set branches on mitigation type: the first rule is unconditional, the subsequent rules are conditional on what the first rule found. A device node must appear on a current drawing and must have at least one FMEA failure mode documented. An FMEA failure-mode node must have a `produces_reaction` edge and either a detection method or a preventative maintenance procedure. The rules are specific to each type but the evaluation machinery is the same: enumerate the rules, evaluate each against current graph state, report any that fail.
+Other node types carry their own rule sets, and the same pattern of conditional rules applies. A hazard node must have a `mitigated_by` edge. That is the first rule. But the type of mitigation determines what further obligations follow. If the mitigation is a safety instrumented function, the hazard must also trace to an SRS entry specifying the function and to SATs verifying it. If the mitigation is a procedural control, the hazard must trace to the procedure that implements it. A mechanical safeguard may require only a design reference. The hazard node's rule set branches on mitigation type: the first rule is unconditional, the subsequent rules are conditional on what the first rule found. A device node must appear on a current drawing and must have at least one FMEA failure mode documented. An FMEA failure-mode node must have a populated `system_reaction` property and either a detection method or a preventative maintenance procedure. The rules are specific to each type but the evaluation machinery is the same: enumerate the rules, evaluate each against current graph state, report any that fail.
 
 This is where the system's complexity lives, and where it scales. Adding a new validation rule to a node type is adding a new propositional check, not rewriting an algorithm. The rule set for a given node type can start simple and grow as the engineering team's understanding of what constitutes completeness deepens. A first implementation might check only that required edges exist. A later iteration might check that referenced documents are at current revision, that tag formats conform to project naming conventions, or that SIL ratings are consistent between the SRS entry and the SAT that verifies it. Each addition is a new rule on a node type, evaluated the same way as every other rule.
 
@@ -358,11 +359,11 @@ The following operations are derived from the traversal and node self-validation
 
 The cascade operation will be the mechanism by which node and edge validation becomes continuous rather than episodic. Each ingest produces a new graph state; the diff against the previous state identifies which nodes and edges have changed. The validation rules on those nodes are re-evaluated, and any node that now fails a rule it previously passed, or any traversal path that is now blocked where it previously completed, is a new finding. Three representative cases:
 
-*A new device appears in a drawing revision.* The drawing parser will discover a device node that did not exist in the previous graph state. Once the node is added to the shared entity layer, its validation rules will run against it. The device has no `produces_reaction` edges from any FMEA failure mode (no documented failure modes), no `exercises_device` edges from any procedure step (untested), and if it has been wired into the SIF spine in the logic layer, the SIF now fails its own validation because one of its devices is unverified. A single drawing change will produce multiple findings, each pointing at a different unfilled obligation.
+*A new device appears in a drawing revision.* The drawing parser will discover a device node that did not exist in the previous graph state. Once the node is added to the shared entity layer, its validation rules will run against it. The device has no incoming `references_device` edges from any FMEA Entry (no documented failure modes), no incoming `exercises_device` edges from any SAT (untested), and if an SRS Entry's subsystem chain has named it via `implemented_by`, that SRS Entry now fails its own validation because one of its devices is unverified. A single drawing change will produce multiple findings, each pointing at a different unfilled obligation.
 
-*A device designation changes.* The drawing parser will see a new identifier (e.g., LT-2105 to LT-2105A). The tag normalizer will collapse common aliases (whitespace, hyphenation, case) but a deliberate redesignation is a real identity change and will produce a new node. The old node loses its drawing-side anchor (no `implements_signal` edge from any current drawing points to it), and any artifact still referencing the old name (PLC code, FMEA, SAT) now points at a node that fails its own validation rules. The new node fails because nothing else has caught up to it. Findings surface as "tag LT-2105 in PLC code does not resolve to a current device" and "device LT-2105A has no FMEA, no procedure, no code references."
+*A device designation changes.* The drawing parser will see a new identifier (e.g., LT-2105 to LT-2105A). The tag normalizer will collapse common aliases (whitespace, hyphenation, case) but a deliberate redesignation is a real identity change and will produce a new node. The old node loses its drawing-side anchor (its `shown_on` edges no longer point to any current drawing sheet), and any artifact still referencing the old name (PLC code, FMEA, SAT) now points at a node that fails its own validation rules. The new node fails because nothing else has caught up to it. Findings surface as "tag LT-2105 in PLC code does not resolve to a current device" and "device LT-2105A has no FMEA, no procedure, no code references."
 
-*Logic or tag references change.* The PLC source parser will discover new `reads_tag` or `writes_tag` edges, or find that previous edges no longer exist. If a SIF's trip logic references a tag that was not previously on the SIF spine, validation rules will run against that tag: is there a procedure step exercising it, are there FMEA failure modes producing reactions for it, is it on a drawing. Each missing edge is a finding.
+*Logic or tag references change.* The PLC source parser will discover new `reads_tag` or `writes_tag` edges, or find that previous edges no longer exist. If a safety function's trip logic references a tag that was not previously on the subsystem chain, validation rules will run against that tag: is there a SAT exercising the device the tag is mapped to, are there FMEA Entries referencing that device, is the device on a current drawing. Each missing edge is a finding.
 
 All three cases should be handled by the same mechanism. There should be no special-case logic for "device added" vs. "tag renamed" vs. "logic changed"; each is a difference between two graph states, and the validity checks will fire on whatever nodes and edges the diff touches.
 
@@ -422,7 +423,7 @@ flowchart LR
     style RTM fill:#EEEDFE,stroke:#534AB7,color:#26215C
 ```
 
-**Feature addition.** A feature gap is discovered at commissioning, for example a missing alarm condition or a missing interlock. Adding a feature is structurally a small new justification chain: a new requirement (or a revision to an existing one), a new behavior in the logic, possibly a new device or a new use of an existing device, a new SAT verifying the new input-output relationship. Blast radius is less about *what existing artifacts are affected* and more about *what new artifacts must be authored to discharge the new obligations the feature creates*. The node self-validation machinery from section 7.3 handles this directly: the new requirement node fails its validation rules (no `verified_by` edge) until the SAT is authored. The new SAT fails its own rules (no `tests_reaction` edge) until the reaction is documented in the FMEA. The traversal from the new requirement cannot complete until every node along its path passes. The graph forces the new feature to be fully justified before it appears as complete.
+**Feature addition.** A feature gap is discovered at commissioning, for example a missing alarm condition or a missing interlock. Adding a feature is structurally a small new justification chain: a new requirement (or a revision to an existing one), a new behavior in the logic, possibly a new device or a new use of an existing device, a new SAT verifying the new input-output relationship. Blast radius is less about *what existing artifacts are affected* and more about *what new artifacts must be authored to discharge the new obligations the feature creates*. The node self-validation machinery from section 7.3 handles this directly: the new requirement node fails its validation rules (no `verified_by` edge) until the SAT is authored. The new SAT fails its own rules (no `addresses` edge to an FMEA Entry) until the FMEA Entry is authored with its `system_reaction` property populated. The traversal from the new requirement cannot complete until every node along its path passes. The graph forces the new feature to be fully justified before it appears as complete.
 
 **Feature consolidation and extension.** The hardest case. Two existing features are consolidated into one with extended scope, for example two separate high-pressure trips (one per vessel) consolidated into a single multi-vessel trip with shared logic, or a manual reset feature extended to include automatic reset under specific conditions. Consolidation is simultaneously a retirement and an addition: the old references must be retired without leaving orphan justifications, the new references must be added with full justification, and the relationship between old and new must be explicit so reviewers can trace what changed and why. Blast radius for consolidation has three components: the retirement set (artifacts referencing the old features that need updating to point at the consolidated feature), the addition set (new artifacts required for the extended scope), and the continuity set (artifacts that must explicitly document the consolidation as a change rather than silently absorbing it). Figure 9 shows the structure.
 
