@@ -321,11 +321,15 @@ A single device tag in the legend can have multiple item rows when the device is
 
 ### 2.5 SAT
 
-Each site acceptance test becomes a SAT node. Source artifacts may be atform Python (`rsd.py`, `mcc.py`, `station_*.py`), HTML (rendered or template), or Word (`.docx`); the SAT parser handles all three formats.
+Each site acceptance test becomes a SAT node. atform is the canonical SAT format and the only render target; hand-written SATs in other formats (legacy Word `.docx`, rendered PDFs from prior projects or other tooling) are ingested for completeness but are expected either to conform to atform's hierarchical numbering and slot in alongside atform-authored tests, or to be converted to atform Python. The SAT parser handles atform Python (`rsd.py`, `mcc.py`, `station_*.py`), Word `.docx`, and text-bearing PDF.
 
-**Key:** SAT number (e.g., `SAT-201`, or atform's hierarchical `18.2.146`).
+**Key:** `numbering_position` — an N-tuple of integers conforming to the project's numbering schema (§2.6). The SAT's atform-rendered ID (`1.1.74.2`, `18.2.146`, etc.) is the dotted form of this tuple. Every SAT carries a stable `numbering_position`; the rendered dotted ID is a presentation projection of it.
 
-**Hierarchy:** `System → Chapter → Test`. Properties: `system_id`, `chapter_nr`, `chapter_name`.
+**Numbering position semantics.** The top N-1 components of the tuple are *declared*: each binds to a project-level table or a graph property defined by the numbering schema (e.g., level 1 = chapter, looked up from a chapter table; level 3 = device, looked up via a per-chapter cabinet-block allocation). The bottom component is *position-with-reserved-slots*: each device-class (or other deepest-level container) carries a slot declaration listing the canonical test variants in order, and atform's auto-numbering assigns the bottom component as the test's position within that slot sequence. A reserved slot whose SAT has not been authored is held in place by `atform.skip_test()`, which increments atform's test counter without rendering anything — so reserved slots cost a counter increment, not a TOC entry, and a SAT that was previously reserved slots into the same number when later authored.
+
+This separation — top N-1 declared, bottom position-with-reservations — is what gives EKG the property the project actually needs: stable IDs across re-emission, late additions in the right place, no manual collision-checking, no renumbering when a previously-reserved slot is filled.
+
+Although the design is anchored to atform here, the underlying numbering machinery — declared upper levels, slot reservation at the bottom level, position-driven auto-numbering — is a general pattern. Any well-developed SAT writing program with hierarchical IDs and slot-holding semantics could serve as the render target by writing a new emitter against the same numbering schema (§2.6). The schema is renderer-agnostic; atform is this project's chosen consumer.
 
 **Procedure shape taxonomy:** SATs come in a known variety of procedure shapes. The shape is identified by a `(fault_class, reaction_class[, device_class])` tuple — EKG-side metadata that informs which factory function emits the procedure list when EKG generates the SAT input. Manually-authored SATs and SATs using project-specific custom patterns may not match any predefined tuple.
 
@@ -341,7 +345,8 @@ Specific values within each axis are project-defined; each project maintains its
 
 | Field | Description |
 |---|---|
-| `test_id` | Primary key |
+| `numbering_position` | N-tuple of integers; the SAT's identity in the project numbering schema (§2.6). Primary key. |
+| `test_id` | Dotted-form rendering of `numbering_position` (e.g., `1.1.74.2`). Presentation projection, not an independent field — derived at render time. |
 | `title` | |
 | `skipped` + `comment` | Skip flag with reason |
 | `purpose` | Generated from canonical pattern |
@@ -361,7 +366,7 @@ Specific values within each axis are project-defined; each project maintains its
 | `comment` | Trailing notes |
 | `test_note_tag_reference_tests[]` → `(plc_tag, referenced_test)` | Cross-SAT dependency arcs |
 
-The SAT data model is a join view across FMEA Entry, Device, SRS Entry, PLC Tag, and Mode nodes. SAT-authored fields are: `test_id`, `title`, `induced_fault`, `induced_fault_detailed_instruction`, `preconditions`, `hmi_message`, `comment`, `area`, `rcs_mode`, `ssc_mode`, and the `test_cases.faultless` / `test_cases.faulted` values per tag. Other fields are pulled from upstream nodes at render time.
+The SAT data model is a join view across FMEA Entry, Device, SRS Entry, PLC Tag, and Mode nodes. SAT-authored fields are: `title`, `induced_fault`, `induced_fault_detailed_instruction`, `preconditions`, `hmi_message`, `comment`, `area`, `rcs_mode`, `ssc_mode`, and the `test_cases.faultless` / `test_cases.faulted` values per tag. The `numbering_position` is composed by the project numbering schema (§2.6) — never freely chosen by the SAT author. Other fields are pulled from upstream nodes at render time.
 
 **Edges:**
 
@@ -382,12 +387,14 @@ The SAT data model is a join view across FMEA Entry, Device, SRS Entry, PLC Tag,
 
 **EKG generation states (EKG → atform input):**
 
-When EKG processes a SAT-shaped node, it emits Python source for atform to consume:
+When EKG processes a SAT-shaped node, it emits one entry per slot in the device's slot declaration (§2.6) in canonical order. Each slot resolves to one of:
 
 1. SAT data exists with a recognized `procedure_pattern` → EKG calls the corresponding factory function to emit the procedure list, wrapped in an `atform.add_test(...)` call.
 2. SAT data exists, no recognized pattern → EKG emits `atform.add_test(procedure=[...])` with a generic step list assembled from the data model.
-3. SAT required by graph state but not yet authored → EKG either skips emission (the SAT does not appear in atform's run yet) or emits a placeholder Test with a single 'TBD' step. Engineering policy decides.
-4. SAT is manually authored → EKG ingests the existing `atform.add_test()` call from the project's `.py` files via the AST parser. EKG does not emit a new one.
+3. Slot is reserved by the schema but no SAT is authored yet → EKG emits `atform.skip_test()`. The slot's position in the counter is held without rendering anything; when the SAT is later authored, the `skip_test()` is replaced by `add_test(...)` and the test ID stays the same.
+4. SAT is manually authored → EKG ingests the existing `atform.add_test()` call from the project's `.py` files via the AST parser. EKG does not re-emit it.
+
+The walk-the-slot-declaration pattern is what makes `numbering_position` stable across re-emission: every authored or reserved slot has a fixed position in the section, every emission produces the same atform counter sequence, and atform assigns the same IDs every time.
 
 **EKG ↔ atform integration:**
 
@@ -396,9 +403,67 @@ EKG's own source never imports atform — EKG runs without atform installed. The
 - **Emission (EKG → atform):** EKG generates `.py` files containing `atform.add_test()` calls as text. atform reads/runs those files as part of its normal operation. Hand-authored modules coexist with EKG-generated modules in the same project.
 - **Ingestion (atform-authored SAT → EKG):** EKG's SAT parser walks the Python AST of existing atform `.py` files (e.g., `rsd.py`, `mcc.py`) and extracts `atform.add_test(...)` calls into the SAT data model. The parser reads source as text; it does not import or execute atform.
 
-The SAT parser handles three input formats: atform Python (AST), HTML (DOM walk), Word `.docx` (python-docx). Parser and emitter are independent — adding a new authoring or rendering format adds an adapter, not a schema change.
+The SAT parser handles three input formats: atform Python (AST walk), Word `.docx` (python-docx), and PDF (text-based extraction with layout-aware structure recovery — covers atform-rendered output, Word-exported SATs, and any text-bearing PDF; scanned image-only PDFs are out of scope without OCR). Parser and emitter are independent — adding a new authoring format adds a parser, and porting to a different SAT renderer adds an emitter; neither changes the schema.
 
 Project-level configuration in `main.py` stays hand-managed.
+
+### 2.6 Project Numbering Schema
+
+EKG does not prescribe a numbering scheme. Any scheme a project chooses is valid, provided two conditions hold:
+
+1. **The scheme is documented** — declared in the project's numbering schema, a config artifact version-controlled alongside the source documents. The schema is the canonical record of what each component of `numbering_position` represents and how it is composed from graph state.
+2. **The deepest level conforms to atform's rules** — because atform is the render target. atform fixes a small number of constraints at the deepest level (everything above the deepest level is fully project-flexible):
+
+   - `atform.set_id_depth(N)` declares the maximum depth.
+   - `atform.section(level, id=N, title=...)` opens a section at any non-deepest level with an explicitly assigned ID. EKG always emits explicit IDs at non-deepest levels — implicit auto-incrementing of sections is fragile under reordering.
+   - `atform.add_test(...)` adds a test at the deepest level, auto-incremented within the current section. atform owns the deepest-level component; EKG cannot assign it directly.
+   - `atform.skip_test()` increments the deepest-level counter without rendering. This is how slots are reserved for late additions without disturbing surrounding numbering, and it is the only mechanism for stable deepest-level IDs across re-emission. Reserved slots cost a counter increment, not a TOC entry.
+
+These are the rules every project's scheme has to live within. Anything else — what level 1 represents, whether level 3 is a device or a category ordinal, whether the schema uses 2 levels or 4, where blocks of reserved IDs sit, what 900-series prefixes mean — is the project's call.
+
+**Schema declaration.** A project's schema declares:
+
+- `levels: N` — matches `atform.set_id_depth(N)`.
+- For each level, a **source binding** describing how that level's component is composed from graph state and project tables.
+- Bindings can be **global** (the same source applies to every value of the parent levels) or **per-pair** (the source for level 3 differs depending on the level-1 and level-2 values). Per-pair bindings are how hybrid schemes work — different categories within the same chapter can use level 3 and level 4 differently.
+
+**Source types** are a toolbox EKG provides; the project picks per level (or per pair) which to use:
+
+- **`project_table`** — look up the component in a project-level table keyed by SAT or connected-node attributes (system → chapter, safety function → category, etc.).
+- **`graph_property`** — read the component directly from a property on the SAT or a connected node when integer-keyed designations already exist in the graph.
+- **`block_allocation`** — allocate IDs in contiguous blocks per a project-defined key (cabinet, subsystem, area). Block size sets per-key capacity; gaps between blocks reserve growth room.
+- **`ordinal`** — auto-incremented within parent context, with optional starting offset (used by 905's `(1, 11, *)` which starts level-3 at 31).
+- **`slot_declaration`** — see below. The standard binding for the deepest level when device-class-specific test variants apply.
+
+**Slot declaration (deepest level).** When the deepest level binds via `slot_declaration`, the project declares an ordered list of test variants per slot-class (typically a device-class, though other slot-classes are valid). Each entry carries a marker:
+
+| Marker | Meaning |
+|---|---|
+| `REQUIRED` | Every member of this slot-class must have this test authored. Missing SAT is a coverage finding. |
+| `OPTIONAL` | Test exists for some members, not others. No finding if absent. |
+| `CONDITIONAL` | Applies only when a stated condition holds (e.g., "device is on a SIF spine"). Finding only if condition holds and SAT is absent. |
+| `RESERVED` | Tail slots produced by the reservation rule. No expected SAT. |
+
+EKG walks the slot declaration in canonical order at emission time. Each slot becomes either `atform.add_test(...)` (authored) or `atform.skip_test()` (not authored). The deepest-level component falls out of the walk position — atform assigns it.
+
+**Reservation: round-up-to-power-of-10.** A slot-class with N declared variants has its reservation set to the smallest power of 10 ≥ N. Classes with 1–9 variants get 10 total slots; classes with 10–99 get 100; etc. Tail slots are emitted as `skip_test()` — counter position held, no TOC entry. When N escalates to 100, the tens-digit gains free organizational meaning (variants 1–9 = electrical fault types, 10–19 = mechanical, 20–29 = communication, etc.).
+
+**Composition.**
+
+- *On ingest:* an existing SAT carries an explicit numbering position (from its atform section/test sequence, its `.docx` title, or its PDF page header). The schema validates the position by reading each level's source against the SAT's graph state and confirming the result matches the SAT's declared component. Mismatches are §4 schema-conformance findings — and apply equally to atform-authored, hand-written, and PDF-only SATs. Hand-written tests do not get an exemption from the schema.
+- *On new SAT:* EKG composes the position from graph state plus the schema. For a missing SAT identified by the FMEA chain, every component is determinable before the SAT is authored. Engineers see the assigned ID up front (§7.x Required Tests projection).
+
+**Renderer-agnosticism.** The schema describes IDs and slot semantics; it does not bind to atform's API. atform is this project's chosen render target, and atform's deepest-level rules are the constraints the schema design respects. Another SAT writing program with hierarchical IDs and slot-holding semantics could serve as a target by writing a new emitter against the same schema, with no schema changes — provided the new program supports the same deepest-level constraints (positional auto-numbering + slot reservation).
+
+**Worked example: 905 project.** The 905 project uses a hybrid 4-level scheme. Levels 1 and 2 are global `project_table` bindings — chapter from system + test campaign, category from safety function or named category. Levels 3 and 4 vary per (chapter, category) pair:
+
+- **`(1, 1, *, *)` device-component tests** — level 3 uses `block_allocation` per cabinet (50-slot blocks: `+RCS-0100` at 1, `+OCC-0110` at 50, `+RSD-0111` at 74). Level 4 uses `slot_declaration` per device-class (DSC class has variant `.1` = stuck-at-low; CR class has variant `.3` = stuck-at-low with variants 1 and 2 reserved or non-applicable). The all-`.3` pattern in 1.1.18–37 reflects this — CR-class slot declarations leave variants 1 and 2 as RESERVED/CONDITIONAL and only variant 3 is authored.
+
+- **`(1, 2..17, *)` functional-category tests** — level 3 uses `ordinal` with category-defined offsets (e.g., `(1, 11, *)` starts at 31). Level 4 is unused (depth-3).
+
+- **`(12, 901..)` and `(18, 902..)` 900-series blocks** — level 2 reserves a 900-series range for late-added categories (CV monitoring, LiDAR, RV upgrade jumpers, ICD mapping, pull tests). The level-3+ bindings within each 900-series category vary; some return to the device-component pattern (`(12, 901, *, *)`), some use ordinal with their own offsets.
+
+Bring-up against the existing master list validates the schema by reproducing every existing dotted ID; gaps and mismatches are bring-up findings (orphan IDs in the master list, missing SATs in the FMEA chain, ingested SATs that don't compose against any declared binding).
 
 ## 3. Edges
 
@@ -523,6 +588,16 @@ Each document type has its own parser. The parser reads the document, produces a
 
   *Safety program partition.* The safety task (Rockwell), F-program (Siemens), or TwinSAFE configuration (Beckhoff) is where the SRS safety functions are implemented. The parser identifies which function blocks or routines implement which safety functions, creating `implemented_by` edges from SRS nodes through to specific code elements. This is the logical layer's contribution to the end-to-end traversal from hazard to verification.
 
+- **SAT parser.** Handles three input formats — atform Python, Word `.docx`, and text-bearing PDF — and produces SAT nodes with the data model from §2.5 plus the edges (`addresses`, `references_srs`, `exercises_device`, `exercises_tag`, `depends_on_test`).
+
+  *atform Python (AST walk).* The parser walks the AST of each module (`mcc.py`, `rsd.py`, etc.) in source order, simulating atform's section / test / skip counters: tracks `set_id_depth(N)` from `main.py`, opens or jumps sections on each `section(level, id=, ...)` call, increments the deepest-level counter on `add_test(...)` and `skip_test()` calls. Each `add_test` call yields a SAT node with its `numbering_position` set to the current (level_1, level_2, …, level_N) tuple. The parser does not import or execute atform — it reads the source as text via `ast`. SAT-authored fields (title, induced_fault, preconditions, hmi_message, test_cases) are extracted from the `add_test` call arguments; computed fields are joined from upstream nodes at validation time.
+
+  *Word `.docx` (python-docx).* Reads headings and structured sections to recover the SAT's `numbering_position` (declared in the title or a header field) and the SAT-authored fields (procedure steps, references, expected behavior). Less structured than atform Python; parser may need per-template hints when heading conventions vary.
+
+  *PDF (layout-aware text extraction).* Reads atform-rendered output, Word-exported SATs, and any text-bearing PDF. Recovers `numbering_position` from the rendered title block and procedure steps from the body. Scanned image-only PDFs are out of scope without OCR. Useful for ingesting legacy SATs where source isn't recoverable.
+
+  Across all three formats, the parser validates the ingested `numbering_position` against the project numbering schema (§2.6) — schema-conformance findings are produced when the position doesn't compose against a declared binding.
+
 ### 6.3 Re-ingestion and Diff
 
 When a revised document is committed, the parser runs again on that document and produces a new set of graph fragments. The ingestion pipeline computes the diff against the previous graph state: nodes added, nodes removed, edges added, edges removed, properties changed. The diff triggers re-evaluation of validation rules on all affected nodes. New findings are the set of nodes or edges that now fail validation where they previously passed, or traversal paths that are now blocked where they previously completed.
@@ -547,7 +622,14 @@ Given a proposed change (a device relocation, a feature addition, a consolidatio
 
 SAT documents are rendered by [atform](https://github.com/jvalenzuela/atform), a Python framework that produces PDF acceptance test documents via reportlab. EKG provides the data model as Python source containing `atform.add_test(...)` calls; atform reads and runs that source to produce the PDFs. atform has no template selector — the procedure list passed to `add_test(procedure=[...])` *is* the SAT-shape mechanism.
 
-When the graph identifies a missing SAT, it assembles the data model from the graph: the FMEA Entry (failure mode description, potential causes, effects), the Device under test (reference designator, function), the SRS references, the expected system reactions (PLC tags with faultless and faulted states), monitored tags, preconditions, induced fault description, and HMI alarm message. EKG then dispatches on the SAT's `procedure_pattern` property (a `(fault_class, reaction_class[, device_class])` tuple — project-defined enumeration) to the corresponding factory function, which emits the procedure list. If no recognized pattern matches, EKG emits a generic step list assembled from the data model. If the SAT is required by graph state but not yet authored, EKG either skips emission or emits a placeholder Test with a single 'TBD' step (engineering policy decides).
+Emission walks the project's numbering schema (§2.6). For each chapter, EKG emits an `atform.section(1, id=…, title=…)` call, then descends per the schema's per-pair bindings — emitting `section(2, …)` and `section(3, …)` as the bindings dictate, with explicit IDs at every non-deepest level. At the deepest level, EKG walks the slot declaration (when the binding is `slot_declaration`) or the ordinal sequence (when `ordinal`), and emits one entry per slot in canonical order:
+
+- **Authored SAT, recognized `procedure_pattern`:** EKG dispatches to the corresponding factory function, which emits the procedure list, wrapped in an `atform.add_test(...)` call.
+- **Authored SAT, no recognized pattern:** EKG emits `atform.add_test(procedure=[...])` with a generic step list assembled from the data model.
+- **Slot reserved by the schema, no SAT authored:** EKG emits `atform.skip_test()`. The deepest-level counter advances; nothing is rendered in the TOC. When the SAT is later authored, the `skip_test()` is replaced by `add_test(...)` and the SAT slots into the same `numbering_position` that the schema reserved for it.
+- **Manually authored SAT (atform Python, hand-edited):** EKG does not re-emit the test. The SAT is already in the source; EKG ingests it via the SAT parser.
+
+For each `procedure_pattern`, the procedure-list factory is project-defined (`fault_class`, `reaction_class`[, `device_class`] tuple → factory function). Common patterns ship as canonical factories; project-specific patterns are added by the engineering team without changing EKG's emitter.
 
 Before emitting, EKG runs the overlap check described in section 4.2: group the pending SAT data models by `(reference_designator.id, induced_fault)`. Any group with more than one entry means multiple FMEA failure modes would produce SATs with the same physical fault injection on the same device. EKG flags these for engineer review. The engineer either consolidates the entries into a single SAT covering multiple failure modes or differentiates the induced fault to make the tests distinct. Only after the overlaps are resolved does EKG emit the `.py` source.
 
@@ -571,6 +653,16 @@ An interface layer per target platform translates the graph's alarm data into th
 - Siemens: TIA Portal HMI alarm table export
 
 Each alarm entry carries the device tag, the alarm message text, the severity derived from the FMEA (OCC/SEV/DET), the triggering condition from the detection method, and the expected system reaction. The alarm doc is generated from the same FMEA and device data that drives the SATs, ensuring consistency between what the system detects, what the operator sees, and what the SAT verifies.
+
+### 7.7 Required Tests Projection
+
+The required-tests projection is the gaps-first output that drives SAT authoring. It lists every SAT the FMEA chain identifies as required but not yet authored, with the SAT's `numbering_position` already composed by the project numbering schema (§2.6). Each row carries the dotted ID, the device or test target, the slot-declaration variant marker (REQUIRED / OPTIONAL / CONDITIONAL), the FMEA Entry the SAT addresses, and the SRS Entry it verifies.
+
+The list is the engineer's pre-authoring worksheet. The engineer sees `1.1.74.2 +RSD-0111-PBPL1 — REQUIRED — addresses ETS.RSD.7.3 — verifies VCS-SRS-1.1` and authors against the assigned ID.
+
+### 7.8 Master Test List Projection
+
+The master test list — the directory of every SAT the project owns — is generated from the graph as a CSV (or any tabular format the project consumes). Columns include `numbering_position` (dotted form), title, device, FMEA reference, SRS reference, slot-declaration marker, workflow state (when synced from M-Files or another tracker), authoring status (authored / reserved / required-not-authored), and any project-specific properties.
 
 ## 8. MCP Server
 
