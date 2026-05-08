@@ -32,186 +32,373 @@ Beyond the proof of concept, a complete project would add:
 - **PLC Source Code.** IEC 61131-3 structured text or function block diagrams. Provides the logical layer: routines, signal reads/writes, system states.
 - **P&IDs.** Process and instrumentation diagrams showing the process-level view of instrumentation.
 
+### 1.3 Format-Agnostic Schema
+
+The schema is invariant against the authoring format. Each upstream document type's parser is a pluggable text-in adapter; the graph layer is the durable middle. When the team migrates an authoring tool — for example, moving HA from Excel to Confluence, or swapping Sistema for an alternative ISO 13849 calculator — only the parser changes. The schema, validation rules, edges, queries, and outputs are unchanged. The PoC is built against the formats the team currently authors in (Excel for HA and FMEA, PDF for SRS narrative and drawings, Sistema SSM for the safety function calculations, atform Python for SATs), but no schema commitment depends on those choices.
+
 ## 2. Node Types
 
 Five node types, one per source document type. Subtypes are properties on the node, not separate types. Validation rules branch on subtype.
 
 ### 2.1 HA Entry
 
-Each row in the hazard analysis becomes an HA node. A single hazard ID may have multiple rows when multiple measures are applied to the same hazard. Each row represents a distinct hazard-measure pairing with its own residual risk assessment.
+Each row in the hazard analysis becomes an HA Entry node. A single hazard ID may have multiple rows when multiple measures are applied to the same hazard. Each row represents a distinct hazard-measure pairing with its own residual risk assessment.
 
 **Key:** Hazard ID + Measure number (e.g., HE-01.2/1, HE-01.2/2)
 
-**Source columns:**
+**Source columns** (per the `3.7.5 HA` data sheet):
 - ID (hazard identifier, e.g., HE-03.5)
 - Hazard Category (e.g., Structural Integrity, Person slipping/falling)
 - Type of hazard (e.g., Mechanical hazard)
 - Potential consequence (e.g., impact, crush)
-- Operating mode (e.g., Automatic)
+- Operating mode (e.g., Automatic, Manual)
 - Use Case (e.g., Normal operation)
 - Sub System (grouping, e.g., RV, Track - Pinch Rail, RV Unload/load station)
 - Hazardous Situation
 - Cause
 - Hazardous Event
-- Risk type (H or S)
+- Risk type — one of:
+  - **H** — Harm to people
+  - **E** — Equipment damage
+  - **S** — Show impact
 - Assessment (narrative risk description)
 - Initial Severity, Probability, Risk Level (pre-measure risk)
 - No. (measure number within this hazard)
 - Measure (the mitigation description)
-- Type of Measure (D = design, PROC = procedural, FS = functional safety)
+- Type of Measure — one of:
+  - **D** — by Design
+  - **FS** — Functional Safety
+  - **W** — Warning notice
+  - **OM** — Note in the operating or maintenance instructions
+  - **PPE** — Personal protective equipment
+  - **PROC** — Procedural / organizational protective measure
 - Post-measure Severity, Probability, Risk Level (residual risk)
-- Measure references (cross-references to documents implementing the measure, may contain multiple entries across multiple subsystems)
+- Responsible / New Assessment
+- Measure Implemented — cross-reference to the document or register entry that implements the measure. The reference target depends on Type of Measure:
+
+  | Type of Measure | Measure Implemented references |
+  |---|---|
+  | D | design reference (drawing detail, calc, BOM line) |
+  | FS | SRS Entry |
+  | W | warning placard / signage register |
+  | OM | O&M manual section |
+  | PPE | PPE specification |
+  | PROC | procedure document (LOTO, calibration, PM, operating) |
+
+  May contain multiple entries delimited by comma; each becomes its own `mitigated_by` edge.
 
 **Multi-reference handling:**
 
-The measure reference column can contain a list of SRS entries, potentially spanning multiple subsystems. For example, HE-03.6 references "RCS SRS 14.1 to 14.16, VCS SRS 2, VCS SRS 4.1 to 4.6." The parser splits this field and creates one `mitigated_by` edge per SRS entry. The system prefix (RCS, VCS) is part of the SRS node key to distinguish entries across subsystems. A single measure (one mitigation description) may fan out to many SRS entries; this is one mitigation implemented through many requirements, not many mitigations.
+The Measure Implemented column can contain a list of references, potentially spanning multiple subsystems. For example, HE-03.6 references "RCS SRS 14.1 to 14.16, VCS SRS 2, VCS SRS 4.1 to 4.6." The parser splits this field and creates one `mitigated_by` edge per reference. The subsystem prefix (RCS, VCS) is part of the SRS Entry key to distinguish entries across subsystems. A single measure (one mitigation description) may fan out to many references — this is one mitigation implemented through many entries, not many mitigations.
 
-**Validation rules:**
-- Must have at least one `mitigated_by` edge to a measure reference.
-- Every measure reference must resolve to a valid node (design document, procedure, or SRS entry depending on measure type).
-- If Type of Measure is FS, every referenced SRS entry must itself be valid: implemented by devices on a SIF spine, verified by SATs. The HA node's validation depends on the validity of the SRS nodes it references. If any referenced SRS node fails its own validation, the HA node inherits that finding.
-- If Type of Measure is PROC, must trace to a procedure that implements the measure.
-- If Type of Measure is D, must trace to a design reference.
-- Post-measure risk level must be lower than initial risk level.
+**Validation scope:**
+
+EKG validates HA Entries whose Type of Measure is **FS** (Functional Safety). FS measures have the multi-document obligation chain — HA → SRS Entry → subsystem chain → SAT — that the graph is designed to traverse. The other measure types (D, W, OM, PPE, PROC) are ingested for completeness so the HA Entry exists in the graph and its properties are queryable, but their validation is the domain of mechanical engineering, document control, and organizational processes, not EKG.
+
+**Validation rules (FS-type entries only):**
+
+- The HA Entry must have at least one `mitigated_by` edge to an SRS Entry. (ISO 13849-1:2015 §4 risk reduction allocation.)
+- Every referenced SRS Entry must resolve to a valid SRS Entry node.
+- The SRS Entry inherits validation: implemented by devices on the subsystem chain, verified by SATs. If any referenced SRS Entry fails its own validation, the HA Entry inherits that finding.
+- Post-measure risk level must be lower than initial risk level. (ISO 12100 risk reduction principle.)
+
+For non-FS entries, the HA Entry is recorded in the graph but no further EKG-side validation is performed.
 
 ### 2.2 SRS Entry
 
-Each safety function specification becomes an SRS node. The source document may be a Word document authored to a project template or a Sistema export; the data is the same either way. Each SRS entry follows a consistent structure: a keyed safety function statement, an ISO 13849-1 analysis table, a subsystem chain with individual PFHD values, and a software design description.
+Each safety function specification becomes an SRS Entry node. The source artifacts are typically a narrative document (Confluence page, Word document, or PDF export) and a Sistema project export. These are two views of the same content: narrative for engineering rationale and stakeholder review, computational for the ISO 13849 architecture and PFHD calculation. The SRS Entry node holds both as properties — *requirement* properties (PLr, S/F/P inputs, hazardous situation refs, reaction time required) and *implementation* properties (subsystem chain, achieved PL, achieved PFHD, MTTFD per channel).
 
-**Key:** System prefix + SRS number (e.g., VCS SRS 1.1, RCS SRS 3.1). The system prefix (VCS, RCS) distinguishes SRS entries across subsystems within the same project.
+**Key:** System prefix + SRS number (e.g., VCS SRS 1.1, RCS SRS 3.1). The system prefix (VCS, RCS) distinguishes SRS Entries across subsystems within the same project.
 
-**Source fields:**
+**Source fields — narrative structure (22-section template per entry):**
 
-*Safety function statement:* A single requirement statement (e.g., "The VCS shall cause a Category 1 stop of the propulsion and yaw actuators when the VStop pushbutton is pressed.")
+The narrative SRS document follows a 22-section, 4-level deep template per entry (50+ entries in a typical project SRS). Each section maps to one or more properties on the SRS Entry node:
 
-*Analysis table (ISO 13849-1):*
+| Section | Properties |
+|---|---|
+| 1 — ISO header | created_date, author, project_name, applicable_documents, status |
+| 2 — Versions | version_history (date, author, change, who/why, comment) |
+| 3 — Hazardous Situation | hazard_situation_refs (the SRS-side of the HA→SRS join: lists hazard IDs the SRS mitigates) |
+| 4 — Triggering Event | triggering_event |
+| 5 — Reaction | reaction_definition, stop_category (e.g., Cat 1 per IEC 60204-1), reaction_time_required |
+| 6 — Performance Level Required | risk_severity (S1/S2), risk_frequency (F1/F2), risk_possibility (P1/P2), plr — ISO 13849-1:2015 Annex A risk graph |
+| 7 — Safe State | safe_state_description |
+| 8 — Frequency of the Request | frequency_of_request |
+| 9 — Interfaces to other SRS Entries | interfaces_with_srs (list of SRS Entry refs — produces SRS↔SRS edges) |
+| 10 — Interfaces to other machine functions | interfaces_with_machine_functions |
+| 11 — Interfaces to ancillary systems | interfaces_with_ancillary |
+| 12 — Interfaces to the Operator | operator_interface (HMI element, push button, key switch, etc.) |
+| 13 — Necessary Start Interlocks | start_interlocks (table of conditions with required state) |
+| 14 — Behavior in the event of an error | error_behavior |
+| 15 — Operating Environment | operating_environment |
+| 16 — Operating modes with active/deactivated SF | active_in_modes (list of project mode strings — e.g., Off, Maintenance, Automatic, Recovery) |
+| 17 — Life cycle | lifecycle_scope |
+| 18 — Reason for the FS solution | fs_rationale (why functional safety, not mechanical or procedural) |
+| 19 — Implementation | required_category (ISO 13849-1 Cat 1–4, §6.2), required_dcavg (§4.5.3), required_mttfd (§4.5.2) |
+| 20 — Hardware Selection | hw_sensors, hw_logic, hw_actuators (candidate device classes per subsystem position) |
+| 21 — Verification | pl_achieved, reaction_time_achieved (with stage breakdown: Sensors, Input, Comm, Logic, Output, Actuators, Reaction Time Motion); reaction_time_for_multiple_faults |
+| 22 — Validation References | validation_refs (links to validation matrices, FAT/SAT documents) |
+
+**Source fields — Sistema computational structure:**
+
+The Sistema project export carries the ISO 13849 architecture computationally. Fields complement the narrative properties above:
+
+*Analysis table (ISO 13849-1:2015 Annex A risk graph):*
 - Severity (S1/S2)
 - Frequency (F1/F2)
 - Possibility (P1/P2)
 - Required Performance Level (PLr)
-- Required Safety Integrity (PL target)
-- PFHD range (e.g., >= 10^-8 to < 10^-7)
+- PFHD range corresponding to PLr (per Table 3)
 - Reaction Time Requirement
 - Mode (All, Automatic, Manual, etc.)
 
-*Subsystem chain:* A table listing each subsystem in the safety function with its subsystem ID, description, and individual PFHD contribution. Subsystem IDs follow a typed prefix convention:
-- SS-I (Input subsystems): field devices and sensors (e.g., SS-I05 Stop Pushbutton, SS-I15 Vehicle Positioning System)
-- SS-L (Logic subsystems): safety processors and I/O modules (e.g., SS-L11 VCS TwinSAFE CPU, SS-L12 VCS Siemens F-CPU)
-- SS-O (Output subsystems): safe state actuators (e.g., SS-O09 Propulsion System Safe State, SS-O10 Yaw System Safe State)
-- SS-X (External subsystems): interfaces to other systems (e.g., SS-X01 Ride Vehicle Safe Linear Position)
+*Subsystem chain (ISO 13849-1:2015 §4.5):* a table listing each subsystem with subsystem ID, description, and individual PFHD contribution. Subsystem IDs follow a typed prefix convention:
 
-Each subsystem ID resolves to a subsystem documented in Section 3 of the SRS, which in turn references specific hardware with part numbers (e.g., Beckhoff EL6910, Siemens 6ES7517-3FP00-0AB0). Those part numbers connect to Device nodes from the drawings.
+- **SS-I** (Input subsystems): field devices and sensors (e.g., SS-I05 Stop Pushbutton, SS-I15 Vehicle Positioning System)
+- **SS-L** (Logic subsystems): safety processors and I/O modules (e.g., SS-L11 VCS TwinSAFE CPU, SS-L12 VCS Siemens F-CPU)
+- **SS-O** (Output subsystems): safe state actuators (e.g., SS-O09 Propulsion System Safe State, SS-O10 Yaw System Safe State)
+- **SS-X** (External subsystems): interfaces to other systems (e.g., SS-X01 Ride Vehicle Safe Linear Position)
 
-*Safety function result:*
-- Reaction Time achieved (e.g., 2310ms)
+Each subsystem ID resolves to a subsystem documented elsewhere in the SRS, which references specific hardware by manufacturer + part number (e.g., Beckhoff EL6910, Siemens 6ES7517-3FP00-0AB0). Those part numbers connect to Device nodes from the drawings.
+
+*Safety function result (ISO 13849-1:2015 §4.5.4):*
+- Reaction Time achieved (e.g., 2310 ms)
 - PL Achieved (e.g., PLe)
-- Total PFHD (sum of subsystem chain, e.g., 3.2E-8)
+- Total PFHD (sum of subsystem chain contributions, e.g., 3.2 × 10⁻⁸)
 
-*Software design:* Narrative description of the signal flow through the safety function.
+*Software design:* narrative description of signal flow through the safety function.
 
 **Edges discovered from SRS:**
-- Each subsystem ID in the subsystem chain references a device or set of devices. The subsystem ID (SS-I05, SS-L11, SS-O09) resolves to specific hardware documented in Section 3 of the SRS, which maps to Device nodes from the drawings through part numbers and device tags. The edge is `implemented_by` from the SRS node directly to the Device node, with the PFHD value as a property on the edge.
-- The SRS node carries a `mitigates` edge from the HA entry that references it.
 
-When an engineer looks at a Device node, they see the SRS entries that depend on it, the FMEA entries that document its failure modes, and the SATs that exercise it. The same device tag connects all three document types through the shared entity layer.
+- Each subsystem ID in the subsystem chain produces an `implemented_by` edge from the SRS Entry to a Device node, with the subsystem position (e.g., SS-I05) and PFHD value as edge properties.
+- Section 9 interface references produce `interfaces_with` edges to other SRS Entries.
+- Section 3 Hazardous Situation references identify the HA Entries that mitigate to this SRS Entry — the same `mitigated_by` edges that the HA's Measure Implemented column produces, but expressed from the SRS side. The two should match; mismatches are cross-document consistency findings.
 
 **Validation rules:**
-- Must have at least one `mitigates` edge from an HA node.
-- Must have a complete subsystem chain: at least one input device (SS-I), at least one logic device (SS-L), and at least one output device (SS-O), each resolving to a valid Device node in the drawings.
+
+- Must have at least one incoming `mitigated_by` edge from an HA Entry. (ISO 13849-1:2015 §4 risk reduction allocation.)
+- Must have a complete subsystem chain — at least one SS-I subsystem, one SS-L subsystem, and one SS-O subsystem, each resolving to a valid Device node. (ISO 13849-1:2015 §4.5.1 architecture.)
 - Every device referenced in the subsystem chain must resolve to a valid Device node.
-- PL Achieved must meet or exceed PLr.
-- Total PFHD must fall within the required range.
-- Must have at least one `verified_by` edge to a SAT node.
+- PL Achieved must meet or exceed PLr. (ISO 13849-1:2015 §4.5.4.)
+- Total PFHD must fall within the required range for the PL. (ISO 13849-1:2015 Table 3.)
+- Must have at least one `verified_by` edge to a SAT. (ISO 13849-1:2015 §8 validation; ISO 13849-2:2012.)
+- The Hazardous Situation cross-reference (section 3) must be consistent with the HA's Measure Implemented column — every HA Entry referencing this SRS Entry should appear in the Hazardous Situation list, and vice versa.
 
-### 2.3 FMEA Entry
+### 2.3 FMEA Entry (Controls FMEA)
 
-Each row in the FMEA becomes an FMEA node. A single FMEA row may reference multiple devices and multiple SATs, because the same failure mode can affect more than one instance of a device in the system. The parser creates one FMEA node per row and one edge per referenced device and per referenced SAT.
+Each row in the Controls FMEA master sheet becomes an FMEA Entry node. One device with multiple failure modes produces multiple FMEA Entry rows for the same device.
 
-**Key:** FMEA entry number (e.g., ETS.DRVS.1.1)
+**Key:** FMEA entry number (e.g., ETS.DRVS.1.1). The hierarchical format `<System>.<SubSystem>.<Group>.<Row>` groups failure modes by device and subsystem.
 
 **Subtypes:**
-- **Safety FMEA entry.** At least one referenced device is on a SIF spine. Inherits SRS traceability obligation, SIL-rated detection coverage requirements, and fault-test-lifecycle SAT mandate.
-- **Standard FMEA entry.** No referenced device is on a SIF spine. Requires a system reaction and detection method but does not carry safety function obligations.
 
-Subtype is determined by the graph: if any device referenced in the FMEA row appears on a SIF spine in the drawing, the safety subtype applies.
+- **Safety FMEA Entry** — when (a) the referenced Device is on a subsystem chain (SS-I/L/O/X) of any SRS Entry (derived via `implemented_by`), OR (b) the engineer has set `safety_relevant: true` on the entry. SEV ≥ 8 is flagged for engineer review as a candidate for `safety_relevant` designation but does not trigger safety subtype on its own.
+- **Standard FMEA Entry** — neither path. Carries failure-mode and reaction properties; not subject to ISO 13849-2 testing obligations.
 
-**Source columns:**
-- System (grouping, becomes a property or parent node)
-- ID (the key)
-- Tests (SAT references, may contain multiple, delimited)
+**Source columns** (per the `Controls FMEA` master sheet):
+
+- Deleted (soft-delete flag)
+- System (top-level subsystem code: ETS, RCS, VCS, etc.)
+- ID
+- Tests (SAT references; produces `tested_by` edges)
+- Test Notes
 - Item (device tag, resolves to Device node)
-- Part Manufacturer, Part Number, Part Description (properties on the Device node, not the FMEA node)
-- Function (property on the Device node or on the device-to-SIF-spine edge)
-- Failure Mode, Potential Cause, Failure Consequences (properties on the FMEA node)
-- Detection (property on the FMEA node, candidate for edge to a diagnostic in the logic layer)
-- System Reaction (property on the FMEA node)
-- OCC, SEV, DET, RPN (properties on the FMEA node)
+- First Item (canonical instance when one row applies to a class of identical devices)
+- Part Manufacturer, Part Number, Part Description (properties of the referenced Device, source of truth in the drawing package)
+- Function
+- Failure Mode
+- Potential Cause
+- Failure Consequences
+- Detection (free-form prose)
+- System Reaction (e.g., "Cat 1 stop of motion," "trip to safe state," "diagnostic alarm")
+- OCC, SEV, DET (integers 1–10 per the project's Evaluation Scheme)
+- RPN (OCC × SEV × DET)
+- GTG (engineer sign-off on the analysis row)
+- Notes
 
-**Validation rules (all subtypes):**
+Workbook-specific columns (`FailureModeGUID`, `Device Count`) are read for parser hints but not stored as schema properties.
+
+**Schema-only properties** (set on the FMEA Entry node, not parsed from the workbook):
+
+- `safety_relevant: bool` — engineer flag. Default false. Triggers safety subtype regardless of subsystem-chain membership.
+- `disposition: {value: "test" | "accept" | "defer", note: <text>}` — engineer's decision for standard-subtype entries with no `tested_by` coverage.
+
+**Validation rules — all subtypes:**
+
 - Must have at least one `references_device` edge to a Device node.
-- Must have a system reaction defined (required property).
-- Must have either a detection method or an `addressed_by` edge to a preventative maintenance procedure.
-- Every referenced device must have a corresponding SAT that exercises that specific device for this failure mode (correspondence check, not just edge count).
+- System Reaction must be a non-empty property.
+- Must have either a Detection property or an `addressed_by` edge to a preventative maintenance procedure. (IEC 61508-2 §7.4.5.)
+- RPN must equal OCC × SEV × DET.
+- OCC, SEV, DET must each be integers in [1, 10].
 
-**Additional validation rules (safety subtype):**
-- Must have a `references` edge to an SRS node.
-- Must have a `tested_by` edge to a SAT node that follows the canonical fault test lifecycle.
-- Diagnostic coverage must be consistent with the SRS entry's requirements.
+**Validation rules — safety subtype:**
+
+- Must have at least one `tested_by` edge to a SAT (parsed from the Tests column). Absence is a finding. (ISO 13849-2:2012.)
+- The addressed SAT must conform to the canonical fault test lifecycle for its (fault_class, reaction_class).
+- Diagnostic coverage must be consistent with the parent SRS Entry's required DC. (ISO 13849-1:2015 §4.5.3.) The SRS Entry is reached via `references_device` → Device → `implemented_by`-inverse → SRS Entry; no direct edge is parsed.
+
+**Coverage audit — standard subtype:**
+
+Standard-subtype FMEA Entries without a `tested_by` edge are surfaced in the §7 coverage report with their SEV, RPN, system_reaction, and `disposition`. Open gaps (no `disposition`, no `tested_by`) are coverage gaps, not findings.
+
+### 2.3b Mechanical FMEA Entry
+
+Each row in the `Mechanical FMEA` sheet becomes a Mechanical FMEA Entry node. Sibling type to FMEA Entry with a different schema: hierarchical key, pre/post planned-action values, no device tag.
+
+**Key:** Mechanical FMEA entry ID.
+
+**Source columns** (per the `Mechanical FMEA` sheet):
+
+- ID
+- Sub System
+- Assembly
+- Sub Assembly
+- Component
+- Failure Cause
+- O (Occurrence, 1–10)
+- Failure
+- D (Detection, 1–10)
+- Failure Consequences
+- S (Severity, 1–10)
+- Comment
+- RPN (O × S × D)
+- Planned Action
+- O', D', S' (post-action values)
+- RPN' (post-action RPN)
+- Requirements List ID
+
+**Validation rules:**
+
+- O, D, S, O', D', S' must each be integers in [1, 10].
+- RPN must equal O × S × D; RPN' must equal O' × S' × D'.
+- RPN' must be lower than RPN. (ISO 12100 risk reduction principle.)
+- For S ≥ 8: Planned Action must be non-empty; RPN' must show meaningful reduction.
+
+Mechanical FMEA Entries do not traverse into the safety-case chain in v1. The Requirements register they reference is not yet ingested.
 
 ### 2.4 Device
 
-Each device in the drawing's enclosure legend tables becomes a Device node. Device labels conform to IEC 81346 reference designation standards: "+" prefixes denote locations or assemblies (+VCS-0102 = Vehicle Control Cabinet), "-" prefixes denote devices within that location (-CB4, -PS4, -FU04). Panel identifiers (-PNL1, -PNL2) are intermediate containers in the hierarchy. This convention is consistent across CAD tools that follow the standard, including EPLAN and AutoCAD Electrical.
+Each device in the drawing's enclosure legend becomes a Device node. The drawing tag convention varies by project; the schema is convention-agnostic. The parser declares which convention it read.
 
-**Key:** Device tag (e.g., +VCS-0102 -CB4, or shorthand CB4 within the context of its cabinet)
+| Convention | Tag examples | Hierarchy |
+|---|---|---|
+| IEC 81346-2 | `+VSD-0104 -CB1`, `+VCS-0102 -PNL1 -RF2` | `+<location>` cabinet/assembly, `-<device>` within, intermediate containers as `-PNL1`, `-PNL2`. Common in EPLAN and European-market drawings. |
+| ISA-5.1 / NFPA 79 | `LT-2105`, `FV-2101`, `PSH-3201`, `TT-1301` | Function-letter prefix (L=level, F=flow, P=pressure, T=temperature, H=high), trailing 4-digit number is the loop/point ID. Common in North American industrial drawings. |
+
+**Key:** Device tag, in the convention used by the source drawing.
 
 **Properties:**
-- Device type
-- Part number (from enclosure legend, e.g., SIE.5SJ4304-7HG42)
-- Type number (e.g., 5SJ4304-7HG42)
-- Manufacturer (e.g., SIE, WEI, PXC, MURR, ABB)
-- Function text (from enclosure legend, e.g., "Motor Cooling Fan 1")
-- Terminal designations
-- Signal type
-- Wire/cable references (from schematic cross-references)
-- Drawing sheet reference (page number in the drawing set)
-- Parent container (cabinet, panel, or assembly from EPLAN hierarchy)
-- SIF spine membership (derived from the drawing topology)
+
+- `tag` — the device tag in the source convention.
+- `tag_convention` — `"IEC 81346"` | `"ISA 5.1"` | ... (set by the parser).
+- `manufacturer` — abbreviation per the enclosure legend (SIE, ABB, MURR, etc.).
+- `part_number` — e.g., `SIE.3LD9200-5C`.
+- `type_number` — e.g., `3LD9200-5C` (without manufacturer prefix).
+- `function_text` — e.g., "Motor Cooling Fan 1".
+- `function_short` — short label derived from `function_text` for use in SAT prose (consumed as `reference_designator.component.function_short` by SAT templates).
+- `terminal_designations` — list of terminals on this device.
+- `signal_type` — for I/O devices: DI, DO, AI, AO, safety DI, safety DO, EtherCAT, etc.
+- `parent_container` — the cabinet, panel, or assembly that contains this device.
+
+**Sub-components:**
+
+A single device tag in the legend can have multiple item rows when the device is a composition of parts (e.g., a disconnect with handle + main switch + lockable shaft + replacement modification, or a circuit breaker with base + auxiliary contact). The Device node aggregates them:
+
+- `sub_components: [{item_number, type_number, part_number, manufacturer, function_text, notes}, ...]`
+
+**Edges:**
+
+- `shown_on` (Device → Drawing Sheet) — from drawing page references.
+- `contained_in` (Device → Cabinet / Panel / Assembly) — from drawing hierarchy.
+- `connected_to` (Device → Device) — from schematic cross-references.
+- `mapped_to` (Tag → Device) — from PLC I/O addressing.
 
 **Validation rules:**
-- Must appear on a current drawing (at least one `shown_on` edge to a drawing sheet).
-- Must have at least one FMEA entry (at least one incoming `references_device` edge from an FMEA node).
-- If on a SIF spine, must be exercised by at least one SAT (at least one incoming `exercises_device` edge from a SAT node).
+
+- Must appear on a current drawing (at least one `shown_on` edge).
+- Device tag must conform to its declared `tag_convention`.
+- If the Device is on a subsystem chain of any SRS Entry (incoming `implemented_by` edge), it must have at least one incoming `exercises_device` edge from a SAT. (ISO 13849-2:2012.)
 
 ### 2.5 SAT
 
-Each site acceptance test becomes a SAT node.
+Each site acceptance test becomes a SAT node. Source artifacts may be atform Python (`rsd.py`, `mcc.py`, `station_*.py`), HTML (rendered or template), or Word (`.docx`); the SAT parser handles all three formats.
 
-**Key:** SAT number (e.g., SAT-201)
+**Key:** SAT number (e.g., `SAT-201`, or atform's hierarchical `18.2.146`).
 
-**Subtypes:**
-- **FMEA-driven SAT.** Validates an FMEA failure mode's detection and mitigation. Must follow the canonical fault test lifecycle (initial conditions, fault injection, observation, safe state verification, reset, return to normal). Traces to at least one FMEA entry, and may also trace to an SRS entry if the failure mode is on a safety device.
-- **Functional SAT.** Tests an input-output relationship from a functional requirement. Traces to a functional requirement or SRS entry.
-- **ICD SAT.** Validates a signal crossing a system boundary. Traces to the interface control document and devices on both sides of the boundary.
-- **Intermediate-state SAT.** Validates a permissive bit or logic state. Traces to the logic layer and the preconditions that drive the state. Required set generated from the precondition list.
+**Hierarchy:** `System → Chapter → Test`. Properties: `system_id`, `chapter_nr`, `chapter_name`.
 
-**Properties:**
-- SAT subtype
-- Referenced FMEA entries
-- Referenced SRS entries
-- Referenced functional requirements
-- Equipment tags exercised
-- Pass/fail status
-- Execution date
+**Procedure shape taxonomy:** SATs come in a known variety of procedure shapes. The shape is identified by a `(fault_class, reaction_class[, device_class])` tuple — EKG-side metadata that informs which factory function emits the procedure list when EKG generates the SAT input. Manually-authored SATs and SATs using project-specific custom patterns may not match any predefined tuple.
 
-**Validation rules (all subtypes):**
-- Must have at least one edge to a justification-layer node (FMEA entry, SRS entry, or functional requirement).
-- Every equipment tag referenced must resolve to a valid Device node.
-- Must have exactly one `tests_reaction` edge.
+| Axis | Description |
+|---|---|
+| `fault_class` | Whether the fault persists after injection or self-clears. The procedure lifecycle differs accordingly. |
+| `reaction_class` | What the system does in response — safe state, warning, no reaction, etc. |
+| `device_class` (optional) | A device-specific refinement of the procedure when the fault-injection method depends on the device type (e.g., process-meter wiring for an analog input, dual-channel verification for safety-rated push buttons). |
 
-**Additional validation rules (FMEA-driven subtype):**
-- Must follow the canonical fault test lifecycle template.
-- Must have at least one `addresses` edge to an FMEA node.
-- If the FMEA entry is a safety subtype, must also have a `references` edge to an SRS node.
+Specific values within each axis are project-defined; each project maintains its own set of factory functions or hand-authored shapes that correspond to entries in the tuple. EKG records the tuple on the SAT node so it knows which factory to invoke when emitting the procedure list.
+
+**SAT data model:**
+
+| Field | Description |
+|---|---|
+| `test_id` | Primary key |
+| `title` | |
+| `skipped` + `comment` | Skip flag with reason |
+| `purpose` | Generated from canonical pattern |
+| `procedure_pattern` | EKG-side identifier for the procedure shape — a `(fault_class, reaction_class[, device_class])` tuple value, or `manual` if the SAT was hand-authored without a recognized pattern |
+| `srs_references[]` → `{name}` | SRS Entry refs |
+| `fmea_references[]` → `{id}` | FMEA Entry refs |
+| `area` | Physical area |
+| `rcs_mode`, `ssc_mode` | Operating mode at system and sub-system levels |
+| `control_system`, `additional_control_systems[]` | |
+| `failure_mode` → `{potential_failure_mode, potential_causes}` | Joined from FMEA Entry |
+| `reference_designator` → `{id, component: {function_short}}` | Joined from Device |
+| `induced_fault`, `induced_fault_detailed_instruction` | Physical action description |
+| `system_reaction_tags[]` → `{tag, test_cases: {faultless: {description, value}, faulted: {description, value}}}` | PLC tags whose values change between faultless and faulted |
+| `monitored_tags[]` | Same shape; verify-but-don't-expect-change |
+| `preconditions[]` | Preconditions to verify before fault induction |
+| `hmi_message` | Alarm text shown on HMI |
+| `comment` | Trailing notes |
+| `test_note_tag_reference_tests[]` → `(plc_tag, referenced_test)` | Cross-SAT dependency arcs |
+
+The SAT data model is a join view across FMEA Entry, Device, SRS Entry, PLC Tag, and Mode nodes. SAT-authored fields are: `test_id`, `title`, `induced_fault`, `induced_fault_detailed_instruction`, `preconditions`, `hmi_message`, `comment`, `area`, `rcs_mode`, `ssc_mode`, and the `test_cases.faultless` / `test_cases.faulted` values per tag. Other fields are pulled from upstream nodes at render time.
+
+**Edges:**
+
+- `addresses` (SAT → FMEA Entry) — one per `fmea_references` entry.
+- `references_srs` (SAT → SRS Entry) — one per `srs_references` entry.
+- `exercises_device` (SAT → Device) — derived from `reference_designator.id`.
+- `exercises_tag` (SAT → Tag) — one per `system_reaction_tags` or `monitored_tags` entry.
+- `depends_on_test` (SAT → SAT) — one per `test_note_tag_reference_tests` entry.
+
+**Validation rules:**
+
+- Must reference at least one justification-layer node (FMEA Entry, SRS Entry, or functional requirement). (ISO 13849-1:2015 §8; ISO 13849-2:2012.)
+- If the SAT addresses a safety-subtype FMEA Entry, it must conform to the canonical fault test lifecycle template for its (fault_class, reaction_class). (ISO 13849-2:2012.)
+- The `reference_designator` must resolve to a valid Device node.
+- Every PLC tag in `system_reaction_tags` and `monitored_tags` must resolve to a valid Tag node.
+- The `induced_fault` must be non-empty for FMEA-driven SATs.
+- The `hmi_message` must match the corresponding alarm config entry.
+
+**EKG generation states (EKG → atform input):**
+
+When EKG processes a SAT-shaped node, it emits Python source for atform to consume:
+
+1. SAT data exists with a recognized `procedure_pattern` → EKG calls the corresponding factory function to emit the procedure list, wrapped in an `atform.add_test(...)` call.
+2. SAT data exists, no recognized pattern → EKG emits `atform.add_test(procedure=[...])` with a generic step list assembled from the data model.
+3. SAT required by graph state but not yet authored → EKG either skips emission (the SAT does not appear in atform's run yet) or emits a placeholder Test with a single 'TBD' step. Engineering policy decides.
+4. SAT is manually authored → EKG ingests the existing `atform.add_test()` call from the project's `.py` files via the AST parser. EKG does not emit a new one.
+
+**EKG ↔ atform integration:**
+
+EKG's own source never imports atform — EKG runs without atform installed. The boundary is text-based in both directions:
+
+- **Emission (EKG → atform):** EKG generates `.py` files containing `atform.add_test()` calls as text. atform reads/runs those files as part of its normal operation. Hand-authored modules coexist with EKG-generated modules in the same project.
+- **Ingestion (atform-authored SAT → EKG):** EKG's SAT parser walks the Python AST of existing atform `.py` files (e.g., `rsd.py`, `mcc.py`) and extracts `atform.add_test(...)` calls into the SAT data model. The parser reads source as text; it does not import or execute atform.
+
+The SAT parser handles three input formats: atform Python (AST), HTML (DOM walk), Word `.docx` (python-docx). Parser and emitter are independent — adding a new authoring or rendering format adds an adapter, not a schema change.
+
+Project-level configuration in `main.py` stays hand-managed.
 
 ## 3. Edges
 
