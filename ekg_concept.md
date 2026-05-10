@@ -91,7 +91,7 @@ Cross-layer edges encode the standards-mandated relationships between artifact c
 - `exercises_device` (procedural → shared): a SAT exercises a device named in its `reference_designator` field.
 - `reads_tag`, `writes_tag` (logical → shared): a routine reads or writes a signal. (IEC 61131-3.)
 - `mapped_to` (shared → shared): a PLC tag is mapped to a device's terminal.
-- `shown_on`, `contained_in`, `connected_to` (system → system): a device appears on a drawing sheet, sits inside a panel, or is connected to another device. (IEC 81346-2 reference designation.)
+- `shown_on`, `contained_in`, `wired_to`, `cabled_to` (system → system): a device appears on a drawing sheet, sits inside a panel, or is connected to another device by a wire or cable. Wire and cable edges are keyed by their unique wire/cable tags. (IEC 81346-2 reference designation.)
 
 A SIF spine is the set of devices, wiring, and logic that together implement a single safety instrumented function. It is the physical and logical path from the field sensor through the logic solver to the final element. Every device on the spine participates in the safety function, and every device on the spine must be individually verified.
 
