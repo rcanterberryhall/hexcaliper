@@ -655,6 +655,8 @@ When a revised document is committed, the parser runs again on that document and
 
 The graph generates outputs as query projections. Different audiences need different projections of the same underlying graph.
 
+**Output formats.** Projections render as HTML within EKG's UI for interactive review and as PDF for sign-off, audit, and archive — those are the conventional formats unless a section says otherwise. Specific projections may also expose CSV or JSON for tooling that consumes machine-readable form. Two sections are exceptions: SAT generation (§7.4) produces PDFs through atform as its own deliverable; alarm generation (§7.6) produces platform-native configuration files (CSV / XML / JSON) through per-platform interface adapters for direct import into the target HMI/SCADA system.
+
 ### 7.1 Validation Matrix
 
 The validation matrix is the master coverage artifact. Auditors use it to confirm that every safety function has a complete subsystem chain with Devices and SATs at every architectural position and that the architectural decomposition matches Sistema's. EKG generates the matrix as a multi-sheet projection of graph state.
@@ -727,7 +729,32 @@ The list is the engineer's pre-authoring worksheet. The engineer sees `1.1.74.2 
 
 ### 7.8 Master Test List Projection
 
-The master test list — the directory of every SAT the project owns — is generated from the graph as a CSV (or any tabular format the project consumes). Columns include `numbering_position` (dotted form), title, device, FMEA reference, SRS reference, slot-declaration marker, authoring status (authored / reserved / required-not-authored), and any project-specific properties.
+The master test list — the directory of every SAT the project owns — is a tabular projection of the graph. Columns include `numbering_position` (dotted form), title, device, FMEA reference, SRS reference, slot-declaration marker, authoring status (authored / reserved / required-not-authored), and any project-specific properties.
+
+### 7.9 Lookup-Table Projections
+
+Engineering teams typically maintain a few hand-curated lookup tables to compensate for the lack of join semantics in spreadsheet tooling. Three are common:
+
+- **Device Lookup** — one row per device tag with derived columns: presence flags (in SATs / in Sistema / in schematics / has FMEA), counts (failure modes, FMEA entries, devices), part metadata (manufacturer, part number, description, function), and engineer-supplied notes.
+- **Failure Mode Lookup** — `GROUP BY (Manufacturer, Part Number, Failure Mode)` over FMEA Entry nodes, returning a deduplicated view of failure modes by part with reference counts.
+- **Part Lookup** — `GROUP BY (Manufacturer, Part Number)` over Device nodes, returning the parts inventory.
+
+In the post-EKG world these stop being inputs and become outputs. Boolean flags are existence queries over typed edges from the device; counts are aggregations over incoming/outgoing edges; part metadata is already on Device nodes; the failure-mode dedup is a `GROUP BY` over FMEA Entry nodes. No Part node type is required (Manufacturer/Part Number/Description/Function are properties on Device), and no workbook-specific GUID is needed (the redundancy-detection key is the `(reference_designator, manufacturer, part_number, failure_mode, failure_cause)` tuple computed at ingest from properties that exist in any plausible authoring format).
+
+EKG generates the projections from queries.
+
+**Authority test for input-vs-output.** A column on a hand-curated sheet is an INPUT only if it carries authority that lives nowhere else. Most lookup-table columns fail this test — counts, presence flags, and joined metadata are all derivable from the underlying nodes and edges. The exceptions are the engineer-supplied judgment columns (notes, ignored), which record decisions that live nowhere else (e.g., "this device is intentionally excluded from coverage because…"). Those migrate one time at initial ingest into Device-node properties (`Device.notes`, `Device.ignored`); engineers update them through EKG's UI thereafter rather than through the sheet.
+
+Lookups serve one transitional purpose during bring-up: regression fixtures. While parsers are being written, the hand-curated Device Lookup is the truth-set the EKG-generated coverage projection is compared against. Once they match consistently, the hand-curated sheets stop being authoritative and the EKG projections become the single source.
+
+### 7.10 Rosetta Stone Projections
+
+A Rosetta Stone projection is a cross-reference view that walks the structure of one entity type and projects related entities at each level. The starting node and the hierarchy determine the view; the underlying graph data is the same.
+
+- **FMEA-indexed Rosetta Stone** — walks FMEA Entries grouped by chapter and system, with the SATs that address each FMEA Entry projected at the leaf level. Hierarchy: System → Chapter → FMEA Entry → SATs.
+- **SRS-indexed Rosetta Stone** — walks SRS Entries grouped by system, with the subsystem-chain Devices and their FMEA Entries projected, plus the SATs that verify each SRS Entry. Hierarchy: System → SRS Entry → (Subsystem chain Devices → FMEA Entries) + verifying SATs.
+
+The two projections answer the same coverage question from different starting points — given this anchor entity, what does the rest of the graph look like reachable from it? Engineers use the FMEA-indexed view when reviewing failure-mode coverage and the SRS-indexed view when reviewing safety-function coverage. EKG generates both as deterministic query results from the same graph state.
 
 ## 8. MCP Server
 
