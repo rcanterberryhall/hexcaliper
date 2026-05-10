@@ -106,7 +106,7 @@ For non-FS entries, the HA Entry is recorded in the graph but no further EKG-sid
 
 ### 2.2 SRS Entry
 
-Each safety function specification becomes an SRS Entry node. The source artifacts are typically a narrative document (Confluence page, Word document, or PDF export) and a Sistema project export. These are two views of the same content: narrative for engineering rationale and stakeholder review, computational for the ISO 13849 architecture and PFHD calculation. The SRS Entry node holds both as properties — *requirement* properties (PLr, S/F/P inputs, hazardous situation refs, reaction time required) and *implementation* properties (subsystem chain, achieved PL, achieved PFHD, MTTFD per channel).
+Each safety function specification becomes an SRS Entry node. The content — narrative engineering rationale plus the ISO 13849 architecture and PFHD calculation — is authored outside EKG, in whatever tooling the engineer prefers (Sistema directly, Confluence, Word, or hand-authored). EKG ingests the resulting artifact(s) and parses both *requirement* properties (PLr, S/F/P inputs, hazardous situation refs, reaction time required) and *implementation* properties (subsystem chain, achieved PL, achieved PFHD, MTTFD per channel) onto the SRS Entry node. Whether the two halves are authored as one combined document or as separate cross-referenced artifacts is the engineer's choice; EKG ingests them, it does not perform a parser-level merge.
 
 **Key:** System prefix + SRS number (e.g., VCS SRS 1.1, RCS SRS 3.1). The system prefix (VCS, RCS) distinguishes SRS Entries across subsystems within the same project.
 
@@ -497,25 +497,73 @@ Edges that should exist but are not found in the source documents are the gaps t
 
 ## 4. Validation Categories
 
-Validation rules fall into two categories that produce different kinds of output and require different levels of human involvement.
+Validation rules produce findings. A finding identifies a node, an edge, or a relationship that doesn't match what the node-type schema or a cross-document rule expects. Every finding — per-node, neighborhood, or cross-document — is an engineer-review item at this stage. The system records the finding, the engineer dispositions it, and the disposition is recorded. The system does not auto-accept or auto-reject. As patterns emerge in how findings get dispositioned, EKG will learn which classes can be resolved automatically; until then, the engineer is the arbiter.
 
-### 4.1 Per-Node Validation (Automated)
+**Standards framework.** EKG validation rules are grounded in:
 
-Per-node validation checks whether a single node satisfies its own type's rules against its current edges and properties. These checks are deterministic: the node either has the required edges or it doesn't, the referenced device either exists on a current drawing or it doesn't, the SAT either follows the fault test lifecycle template or it doesn't.
+- **ISO 13849-1:2015** and **ISO 13849-2:2012** — primary anchor; safety-related parts of control systems for machinery (PLr / PL achieved / PFHD / category, subsystem chain, fault test lifecycle).
+- **IEC 61508** — foundational functional-safety standard for E/E/PE safety-related systems; ISO 13849 is aligned with it.
+- **IEC 61511** — sector-specific functional-safety standard (process industry safety instrumented systems); applies to control aspects with continuous-mode safety functions.
+- **ISO 12100:2010** — parent risk-assessment standard for machinery (risk-reduction hierarchy, post-measure residual risk). Applicable as the document from which ISO 13849's risk-reduction allocation derives.
 
-Per-node findings are actionable. A missing edge means a missing artifact that needs to be authored. A stale reference means a document that needs to be updated. A format violation means a procedure that needs to be revised. The system reports pass/fail, and the engineer acts on the failures.
+Where a rule is mandated by one of these standards, the rule cites the clause. Rules without a citation are project conventions internal to EKG.
 
-Examples: HA entry with no mitigation. FMEA entry with no system reaction. Device with no FMEA entry. SAT referencing a device that doesn't exist on a current drawing. FMEA entry referencing three devices but only two have covering SATs.
+### 4.1 Per-Node Validation
 
-### 4.2 Neighborhood Validation (Engineer Review)
+Per-node validation checks whether a single node satisfies its own type's rules against its current edges and properties. The check is deterministic: the node either has the required edges or it doesn't, the referenced device either exists on a current drawing or it doesn't, the SAT either follows the fault test lifecycle template or it doesn't.
+
+Per-node findings name the node, the rule that didn't hold, and the related nodes. A missing edge points to a missing artifact that needs to be authored; a stale reference points to a document that needs to be updated; a format violation points to a procedure that needs to be revised.
+
+Examples: HA Entry with no mitigation. FMEA Entry with no system reaction. Device with no FMEA Entry. SAT referencing a device that doesn't exist on a current drawing. FMEA Entry referencing three devices but only two have covering SATs.
+
+#### 4.1.1 Schema Conformance
+
+Every node must conform to its type's schema (§2). The schema declares which properties are required, which are optional, and which shapes or enumerations they must satisfy. Schema-conformance findings identify nodes missing required properties, properties of the wrong shape, or properties whose values fall outside the schema's enumeration. Schemas are declared in YAML. Schema conformance is project-internal — the schema is EKG's own representation contract, not an obligation imposed by an external standard.
+
+#### 4.1.2 Type-Dispatched Rule Packs
+
+Some node types subtype on a property, and the rule pack to apply varies by subtype. A type-dispatched node first satisfies the schema-conformance check (which selects the subtype), then the dispatch table picks the rule pack to run.
+
+**HA Entry — dispatched on Type of Measure.** §2.1 documents the six values (D, FS, W, OM, PPE, PROC). The values map to the ISO 12100:2010 risk-reduction hierarchy:
+
+- **D (by Design)** — inherently safe design (ISO 12100:2010 §6.2). Rule pack: schema conformance; `Measure Implemented` resolves to a valid design artifact (drawing detail, calculation, BOM line).
+- **FS (Functional Safety)** — safeguards via safety-related control system (ISO 12100:2010 §6.3; ISO 13849-1:2015 §4 risk reduction allocation). Full chain rule pack: at least one `mitigated_by` edge to a valid SRS Entry, transitive validation through the SRS chain (devices on the subsystem chain, SATs verifying the SRS), post-measure risk level lower than initial (ISO 12100 risk-reduction principle), and reciprocity with the SRS's Hazardous Situation listing (§4.3).
+- **W (Warning notice)** — information for use (ISO 12100:2010 §6.4). Rule pack: schema conformance; reference resolves to a valid signage / placard register entry.
+- **OM (Note in O&M)** — information for use (ISO 12100:2010 §6.4). Rule pack: schema conformance; reference resolves to a valid O&M manual section.
+- **PPE** — information for use, PPE category (ISO 12100:2010 §6.4). Rule pack: schema conformance; reference resolves to a valid PPE specification.
+- **PROC (Procedural / organizational)** — complementary protective measure (ISO 12100:2010 §6.4). Rule pack: schema conformance; reference resolves to a valid procedure document (LOTO, calibration, PM, operating).
+
+Only FS entries get the full obligation-chain check. Non-FS rule packs verify schema conformance and reference existence; substantive validation of the design artifact, signage, manual, PPE specification, or procedure is outside EKG's scope and remains the domain of the disciplines that own those artifact types (mechanical engineering, document control, organizational processes).
+
+**FMEA Entry — dispatched on safety classification.** §2.3 defines two paths for classification as a Safety FMEA Entry:
+
+- **Structural** — the referenced Device is on the subsystem chain (SS-I/L/O/X) of any SRS Entry, derived from the Device's incoming `implemented_by` edges. Automatic at ingest. Grounded in ISO 13849-1:2015 §4.5 (subsystem architecture): every device on the SRS subsystem chain participates in the safety function, and its failure modes carry ISO 13849-2:2012 testing obligations.
+- **Explicit** — the engineer has set `safety_relevant: true` on the entry. Project convention. Covers cases the structural path misses — devices that contribute to a safety function via a non-Sistema-modeled path, or devices whose safety relevance the engineer wants to assert irrespective of the structural derivation.
+
+Either path classifies the entry as Safety FMEA, subject to the safety rule pack (system reaction defined, SAT coverage required, fault test lifecycle conformance per ISO 13849-2:2012). Neither path classifies the entry as Standard FMEA, subject to a lighter rule pack: failure-mode and reaction properties only, no testing obligations.
+
+SEV ≥ 8 is not a third path. It produces a finding for engineer review when the entry is not classified safety: "FMEA Entry has SEV ≥ 8 but is not classified safety; engineer should confirm or set `safety_relevant: true`." The finding flags potential under-classification; the engineer either reclassifies or accepts the standard subtype with rationale recorded. Project convention — IEC 60812 (FMEA methodology) does not prescribe a safety-classification threshold.
+
+### 4.2 Neighborhood Validation
 
 Neighborhood validation surfaces patterns that emerge from the relationships between nodes that share edges. The pattern itself is computable, but the disposition requires engineering judgment.
 
 The primary case is overlap detection on induced fault actions. SATs are procedurally generated through atform, and the induced fault is a structured property in the data model, not free text. Two SATs that share the same device tag and the same induced fault property are an exact match. The detection is a straightforward property comparison: group SAT nodes by device tag and induced fault, and any group with more than one SAT is a convergence that gets flagged for engineer review.
 
-This overlap detection moves upstream from post-authoring review to pre-generation. When EKG assembles the data models for a batch of SATs from FMEA entries, it can detect that two FMEA entries on the same device would produce SATs with the same induced fault before handing anything to atform. The engineer resolves it at that point: consolidate into one SAT that covers both failure modes, or differentiate the induced fault to make the tests genuinely distinct. Only after the engineer resolves the overlap do the SATs get generated.
+This overlap detection moves upstream from post-authoring review to pre-generation. When EKG assembles the data models for a batch of SATs from FMEA Entries, it can detect that two FMEA Entries on the same device would produce SATs with the same induced fault before handing anything to atform. The engineer resolves it at that point: consolidate into one SAT that covers both failure modes, or differentiate the induced fault to make the tests genuinely distinct. Only after the engineer resolves the overlap do the SATs get generated.
 
-Neighborhood findings are review items, not action items. The system presents the convergence pattern, the nodes involved, and the shared properties. The engineer reviews, confirms or resolves, and the disposition is recorded. The system does not auto-accept or auto-reject neighborhood findings.
+Neighborhood findings are review items, not action items. The system presents the convergence pattern, the nodes involved, and the shared properties. The engineer reviews, confirms or resolves, and the disposition is recorded.
+
+### 4.3 Cross-Document Reciprocity
+
+When two artifacts reference each other from opposite directions, the references must agree. Mismatches surface as findings naming both sides and the inconsistent reference.
+
+**HA↔SRS reciprocity.** Each FS-type HA Entry's `mitigated_by` edge (set from the HA's `Measure Implemented` column) names an SRS Entry. The SRS Entry's section 3 Hazardous Situation listing names the HA Entries the SRS mitigates. The two views must agree:
+
+- Every `mitigated_by` edge from HA to SRS should appear as a hazard-situation reference on the SRS.
+- Every hazard-situation reference on the SRS should be reciprocated by a `mitigated_by` edge from the named HA.
+
+Either-side-only references produce findings. The engineer resolves by adding the missing reference on whichever side, or by removing the reference on the side that had it incorrectly. ISO 13849-1:2015 §4 requires risk-reduction allocation to be traceable from hazard to safety function; the reciprocity check is the project-convention mechanism that makes that traceability mechanically verifiable across the two source artifacts (HA worksheet and SRS document).
 
 ## 5. Storage
 
@@ -557,7 +605,8 @@ For teams using Confluence, a sync job pulls content from the Confluence API on 
 Each document type has its own parser. The parser reads the document, produces a set of nodes and edges with provenance, and returns them to the ingestion pipeline.
 
 - **HA parser.** Reads keyed table rows from Excel or Word. Creates HA Entry nodes. Creates `mitigated_by` edges from the mitigation column.
-- **SRS parser.** Reads safety function entries from a Word document or Sistema export. Each SRS entry is identified by its heading (e.g., "VCS SRS 1.1: Prevention of propulsion and yaw movement in case of VStop"). The parser extracts the safety function statement, the ISO 13849-1 analysis table, the subsystem chain with PFHD values, and the safety function result (PL achieved, reaction time, total PFHD). Creates SRS Entry nodes keyed by system prefix + SRS number. Subsystem IDs (SS-I05, SS-L11, SS-O09) in the chain are resolved to Device nodes through the part numbers and device tags documented in the subsystem sections. Creates `implemented_by` edges from the SRS node directly to each Device node, with the PFHD value as a property on the edge.
+- **SRS parser.** Reads safety function entries from a Word document, Confluence-exported HTML, or Sistema export. Each SRS entry is identified by its heading (e.g., "VCS SRS 1.1: Prevention of propulsion and yaw movement in case of VStop"). The parser extracts the safety function statement, the ISO 13849-1 analysis table, the subsystem chain with PFHD values, and the safety function result (PL achieved, reaction time, total PFHD). Creates SRS Entry nodes keyed by system prefix + SRS number. Subsystem IDs (SS-I05, SS-L11, SS-O09) in the chain are resolved to Device nodes through the part numbers and device tags documented in the subsystem sections. Creates `implemented_by` edges from the SRS node directly to each Device node, with the PFHD value as a property on the edge.
+- **Confluence parser.** Engineers using Confluence as their authoring tool work in their existing wiki; the sync job (§6.1) writes synced page content into the git repo, and the Confluence parser turns the synced content (HTML or storage-format export) into Entry nodes. The parser recognizes Confluence page structure (page title, heading hierarchy, tables, page-properties macros) and dispatches to the appropriate node-type handler — SRS Entry, HA Entry, or other — based on page metadata or path. Placeholder; the full specification depends on the team's Confluence content shape and is deferred until that shape is finalized.
 - **FMEA parser.** Reads keyed table rows from the master Controls FMEA sheet (34 columns including Tests, Test Notes, Detection, System Reaction). Creates FMEA Entry nodes with `system_reaction`, `failure_consequences`, and `detection` as properties. Creates `references_device` edges from the Item / equipment-tag column and `tested_by` edges from the Tests column. Does not parse `references_srs` — the FMEA→SRS path is derived via the two-hop traversal FMEA→Device→SRS.
 - **Mechanical FMEA parser.** Reads the separate `Mechanical FMEA` sheet (20 columns, hierarchical key System / Sub System / Assembly / Sub Assembly / Component, pre/post planned-action OCC/DET/SEV/RPN). Creates Mechanical FMEA Entry nodes (sibling node type to FMEA Entry, different schema, no device-tag join — failures live at the assembly level where there is no `+...-device` reference designator).
 - **Drawing parser (EPLAN PDF).** EPLAN PDF exports contain structured text that provides the device inventory, hierarchy, and wiring topology without requiring OCR or image analysis. The parser extracts three categories of data:
@@ -608,7 +657,23 @@ The graph generates outputs as query projections. Different audiences need diffe
 
 ### 7.1 Validation Matrix
 
-Organized by requirement or safety function. One row per obligation chain. Columns for each link in the chain (HA entry, SRS entry, devices, FMEA entries, SATs). Where the traversal from hazard to SAT completes on all-valid nodes and edges, the row is complete. Where it halts, the row shows the gap. This replaces the manually-constructed validation matrix.
+The validation matrix is the master coverage artifact. Auditors use it to confirm that every safety function has a complete subsystem chain with Devices and SATs at every architectural position and that the architectural decomposition matches Sistema's. EKG generates the matrix as a multi-sheet projection of graph state.
+
+**Sheet tiers.** The matrix contains four tiers of sheets:
+
+1. **Index sheets** — project orientation and revision history.
+2. **Reliance Matrix** — one row per SRS Entry, with columns for `validation_use` (`Full Validation` / `Fully Validated` / `Not Considered` / `Replaced`), `validation_review` (`Complete` / `In Progress` / etc.), and `validation_details` (free-form notes, typically constraints or deferrals). These columns are SRS-Entry-level properties EKG carries; the sheet is a flat projection of them.
+3. **Per-system SF Validation sheets** — one per system, each a hierarchical projection of every SRS Entry in that system (structure described below). The per-system sheets are the core of the matrix and the largest by row count.
+4. **Functional grouping sheets** and **project-specific sheets** — flat projections of SATs filtered by category. Categories are derived from the SAT's `numbering_position` plus user-defined groupings that may cross level boundaries.
+
+**Per-system SF Validation sheet structure.** Each sheet is a sequence of SF blocks. One block per SRS Entry, with hierarchical row structure:
+
+- **SF header row** — SRS title and testing-requirement marker (e.g., `Diagnostic`).
+- **Chain element label rows** — `Input:` / `Logic:` / `Output:` — top-level decomposition matching the Sistema subsystem position (SS-I / SS-L / SS-O). Derived from grouping the SRS Entry's outgoing `implemented_by` edges by `subsystem_role`.
+- **Sistema sub-block groupings** — within each chain element, `implemented_by` edges are further grouped by architectural sub-element (one sub-block per Sistema-defined unit, separated by a blank row). Sub-grouping requires Sistema integration; until the Sistema parser is in place, sub-grouping uses the Device's `parent_assembly` property as a proxy.
+- **SAT rows** — within each sub-block, one row per SAT verifying any Device in that sub-block. The SAT row carries `numbering_position` (dotted form), title, and function descriptor (Device.function or per-SAT property). Composed by walking `tested_by`-inverse from the Device's FMEA Entries to enumerate verifying SATs.
+
+**Composition summary.** The matrix derives mechanically from graph state — the Reliance Matrix from SRS Entry properties, the per-system sheets from `implemented_by` and `tested_by` edge traversals, the grouping sheets from `numbering_position`-based filters. Coverage state is always current with graph state; no hand-curation lag. The engineer-review part is the disposition of incomplete chains, not the matrix generation itself.
 
 ### 7.2 Coverage Report
 
@@ -662,7 +727,7 @@ The list is the engineer's pre-authoring worksheet. The engineer sees `1.1.74.2 
 
 ### 7.8 Master Test List Projection
 
-The master test list — the directory of every SAT the project owns — is generated from the graph as a CSV (or any tabular format the project consumes). Columns include `numbering_position` (dotted form), title, device, FMEA reference, SRS reference, slot-declaration marker, workflow state (when synced from M-Files or another tracker), authoring status (authored / reserved / required-not-authored), and any project-specific properties.
+The master test list — the directory of every SAT the project owns — is generated from the graph as a CSV (or any tabular format the project consumes). Columns include `numbering_position` (dotted form), title, device, FMEA reference, SRS reference, slot-declaration marker, authoring status (authored / reserved / required-not-authored), and any project-specific properties.
 
 ## 8. MCP Server
 
