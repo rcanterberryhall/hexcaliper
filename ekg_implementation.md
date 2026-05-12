@@ -36,6 +36,35 @@ Beyond the proof of concept, a complete project would add:
 
 The schema is invariant against the authoring format. Each upstream document type's parser is a pluggable text-in adapter; the graph layer is the durable middle. When the team migrates an authoring tool — for example, moving HA from Excel to Confluence, or swapping Sistema for an alternative ISO 13849 calculator — only the parser changes. The schema, validation rules, edges, queries, and outputs are unchanged. The PoC is built against the formats the team currently authors in (Excel for HA and FMEA, PDF for SRS narrative and drawings, Sistema SSM for the safety function calculations, atform Python for SATs), but no schema commitment depends on those choices.
 
+### 1.5 Source-of-truth principle
+
+Every EKG **node type** has exactly one source-of-truth document type
+that defines which instances exist. All other documents produce
+**references** (edges with unresolved targets, resolved via the queued-
+edge pool) to those instances, never the instances themselves. The
+canonical mappings are: Device ↔ electrical drawing package; HA Entry
+↔ HA workbook; SRS Entry ↔ SRS PDF (augmented by SSM, which adds
+implementation properties to the SAME SRSEntry rather than minting a
+new node); FMEA Entry ↔ FMEA workbook; SAT ↔ M-Files.
+
+Every **property** on every node also has exactly one canonical source.
+Even when multiple documents capture the same data (typically as
+engineer redundancy — e.g., the Controls FMEA workbook captures
+Part Manufacturer / Part Number / Part Description, but those are
+Device properties), the EKG stores the property from the canonical
+source only. The non-canonical document may trigger a deferred
+**consistency rule** (run when both sources are present), but never
+contributes a stored value.
+
+Two consequences:
+
+- Cross-document mentions become **queued edges** in
+  ``Store._pending_edges``, resolved when the source-of-truth document
+  lands in the corpus.
+- A "missing source" condition is diagnosed uniformly via the
+  ``graph.unresolved_edge`` finding, regardless of which document is
+  absent.
+
 ## 2. Node Types
 
 Five node types, one per source document type. Subtypes are properties on the node, not separate types. Validation rules branch on subtype.
