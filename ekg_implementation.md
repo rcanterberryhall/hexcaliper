@@ -36,6 +36,8 @@ Beyond the proof of concept, a complete project would add:
 
 The schema is invariant against the authoring format. Each upstream document type's parser is a pluggable text-in adapter; the graph layer is the durable middle. When the team migrates an authoring tool — for example, moving HA from Excel to Confluence, or swapping Sistema for an alternative ISO 13849 calculator — only the parser changes. The schema, validation rules, edges, queries, and outputs are unchanged. The PoC is built against the formats the team currently authors in (Excel for HA and FMEA, PDF for SRS narrative and drawings, Sistema SSM for the safety function calculations, atform Python for SATs), but no schema commitment depends on those choices.
 
+Electrical drawings exemplify this format-agnosticism most sharply: the EKG schema defines Device, DrawingSheet, and their edges uniformly, but projects produce drawings in multiple source formats depending on their toolchain lineage. EPLAN-produced PDFs (IEC 81346 tag convention, structured outline tree with embedded device hierarchy) are the first ingested format. AutoCAD Electrical PDFs (ISA-5.1 / NFPA tag convention, page-by-page text extraction) and AutoCAD native `.dwg` files (binary CAD format, different toolchain entirely) are future parsers. All three emit the same Device + DrawingSheet schema; only the parser internals diverge.
+
 ### 1.5 Source-of-truth principle
 
 Every EKG **node type** has exactly one source-of-truth document type
@@ -64,6 +66,8 @@ Two consequences:
 - A "missing source" condition is diagnosed uniformly via the
   ``graph.unresolved_edge`` finding, regardless of which document is
   absent.
+
+**Failure modes are part-level; reactions are device-level.** The intrinsic failure modes of a device are determined by its part_number (the hardware) — every Device installation built from the same part has the same failure modes. The system reaction to a failure is determined by the device's installation context (which loop / safety chain it participates in). EKG models this by keying failure-mode catalogs by part_number (a future plan refactors current FMEAEntry to factor failure modes out into a part-keyed node) while leaving reactions on FMEAEntry — one per Device installation. In the interim, the rule `fmea.shared_part_failure_consistency` fires across FMEAEntry nodes that share a `Device.part_number` and warns when their failure-mode descriptions diverge.
 
 ## 2. Node Types
 
@@ -307,51 +311,68 @@ Mechanical FMEA Entries do not traverse into the safety-case chain in v1. The Re
 
 ### 2.4 Device
 
-Each device in the drawing's enclosure legend becomes a Device node. The drawing tag convention varies by project; the schema is convention-agnostic. The parser declares which convention it read.
+Each device in the drawing package becomes a Device node. The drawing tag convention varies by project; the schema is convention-agnostic. The parser declares which convention it used.
 
-| Convention | Tag examples | Hierarchy |
+| Convention | Tag examples | Key shape |
 |---|---|---|
-| IEC 81346-2 | `+VSD-0104 -CB1`, `+VCS-0102 -PNL1 -RF2` | `+<location>` cabinet/assembly, `-<device>` within, intermediate containers as `-PNL1`, `-PNL2`. Common in EPLAN and European-market drawings. |
-| ISA-5.1 / NFPA 79 | `LT-2105`, `FV-2101`, `PSH-3201`, `TT-1301` | Function-letter prefix (L=level, F=flow, P=pressure, T=temperature, H=high), trailing 4-digit number is the loop/point ID. Common in North American industrial drawings. |
+| IEC 81346-2 | `=1620F++RS12+VSD-0101-PNL1-Q1` | Full tag concatenates all aspects: `=` (building/structure), `++` (function), `+` (location/cabinet), `-` (device or sub-container). Common in EPLAN and European-market drawings. |
+| ISA-5.1 / NFPA 79 | `LT-2105`, `FV-2101`, `PSH-3201`, `TT-1301` | Function-letter prefix (L=level, F=flow, P=pressure, T=temperature, H=high), trailing 4-digit number encodes sheet and position. For example, `LT-2105` = sheet 21, position 05 — making `shown_on` edge derivation tag-direct (tag → sheet) rather than requiring an outline walk as with IEC 81346. Common in North American industrial drawings. |
 
-**Key:** Device tag, in the convention used by the source drawing.
+**Key:** For IEC 81346, the full concatenated tag (e.g., `=1620F++RS12+VSD-0101-PNL1-Q1`) incorporating all aspects. For ISA 5.1 / NFPA, the tag as declared (e.g., `LT-2105`). The key is **location-unique**: two physically identical breakers in two cabinets are two Device nodes, not one. This is essential because failure modes are part-level (shared across every installation of the same `part_number`) while system reactions are device-level (unique to each installation's position in a loop or safety chain). Collapsing two physical installs into one node would lose the per-installation reaction.
+
+**Drawing revision stability.** By IEC 81346 convention, Device identity is revision-stable — the same `-Q1` in `+VSD-0104` stays `Q1` in `+VSD-0104` across every drawing revision until physical removal. This means cross-document edges from FMEA Entries and SRS Entries survive drawing revisions automatically, because they key on the Device's tag, not on any DrawingSheet key. Re-ingest of a new drawing revision drops and replaces nodes and edges whose Provenance.source matches the file path; cross-document edges reconnect without intervention.
+
+**Drawing source formats.** The schema is format-agnostic. EPLAN-produced PDFs (Plan 5, IEC 81346 convention) are the first ingested format. AutoCAD Electrical PDFs (ISA-5.1 / NFPA convention, future parser) and AutoCAD native `.dwg` files (future parser, separate toolchain) emit the same Device + DrawingSheet schema. Parser internals differ; the schema does not.
 
 **Properties:**
 
-- `tag` — the device tag in the source convention.
+- `key` — full IEC 81346 tag (or full ISA 5.1 tag for NFPA-convention drawings). Primary identity.
+- `tag` — device aspect leaf (e.g., `Q1` extracted from the full IEC 81346 tag; the full tag for ISA 5.1).
 - `tag_convention` — `"IEC 81346"` | `"ISA 5.1"` | ... (set by the parser).
+- `building` — IEC 81346 `=` aspect (structure/building). Absent for ISA 5.1.
+- `function` — IEC 81346 `++` aspect. Absent for ISA 5.1.
+- `cabinet` — IEC 81346 `+` aspect (location). For ISA 5.1, derived from the sheet's panel assignment when available.
+- `panel` — intermediate IEC 81346 `-` container (e.g., `-PNL1`), when present.
 - `manufacturer` — abbreviation per the enclosure legend (SIE, ABB, MURR, etc.).
-- `part_number` — e.g., `SIE.3LD9200-5C`.
+- `part_number` — e.g., `SIE.3LD9200-5C`. **Dual join key**: today → BOM attribute source; future → device library (capability ratings) and FailureMode catalog (part-level failure profiles). See below.
 - `type_number` — e.g., `3LD9200-5C` (without manufacturer prefix).
 - `function_text` — e.g., "Motor Cooling Fan 1".
-- `function_short` — short label derived from `function_text` for use in SAT prose (consumed as `reference_designator.component.function_short` by SAT templates).
 - `terminal_designations` — list of terminals on this device.
 - `signal_type` — for I/O devices: DI, DO, AI, AO, safety DI, safety DO, EtherCAT, etc.
-- `parent_container` — the cabinet, panel, or assembly that contains this device.
+
+Note: `function_short` (short label for SAT prose) is an atform-emission concern and is not a stored Device property. It is derived at SAT-generation time from `function_text`.
+
+**Capability ratings deferred.** SIL, PL, MTTDf, voltage/current limits, and other capability data are **not** on the Device schema. They belong to a future device library keyed by `part_number`, sourced from manufacturer datasheets. Capability validation rules (e.g., "every device on this SIF chain must have PL ≥ d") wait for that library.
 
 **Sub-components:**
 
-A single device tag in the legend can have multiple item rows when the device is a composition of parts (e.g., a disconnect with handle + main switch + lockable shaft + replacement modification, or a circuit breaker with base + auxiliary contact). The Device node aggregates them:
+A single device tag can have multiple item rows when the device is a composition of parts (e.g., a disconnect with handle + main switch + lockable shaft + replacement modification, or a circuit breaker with base + auxiliary contact). The Device node aggregates them:
 
 - `sub_components: [{item_number, type_number, part_number, manufacturer, function_text, notes}, ...]`
 
 **Edges:**
 
-- `shown_on` (Device → Drawing Sheet) — from drawing page references.
-- `contained_in` (Device → Cabinet / Panel / Assembly) — from drawing hierarchy.
-- `wired_to` (Device → Device) — from schematic wire tags. Edge keyed by wire tag; properties include source/destination terminal designations, signal name, voltage, and gauge.
-- `cabled_to` (Device → Device) — from schematic cable tags. Edge keyed by cable tag; properties include conductor count, type, length, and voltage rating. Multiple wire-edges may share a cable via the `cable` property linking back to the cable tag.
-- `mapped_to` (Tag → Device) — from PLC I/O addressing.
+- `shown_on` (Device → DrawingSheet) — one edge per page where the device's tag occurs in the drawing outline.
+- `wired_to` (Device → Device) — from schematic wire tags. Edge keyed by wire ID; properties include source/destination terminal designations, wire ID, confidence level, and which extractor(s) produced it.
+- `cabled_to` (Device → Device) — from schematic cable tags. Edge keyed by cable group identifier; properties include the underlying wire ID set, cable type, and confidence.
+- `mapped_to` (Tag → Device) — from PLC I/O addressing. Deferred; requires PLC Tag node minting from PLC project files.
+
+**Cabinet / panel hierarchy — properties, not edges.** The IEC 81346 `+` aspect (cabinet) and intermediate `-` aspect (panel) are stable identifiers exposed as `Device.cabinet` and `Device.panel` properties. Cabinet-level filtering works via property predicates, not edge traversal. If a future rule or query needs cabinet→device aggregation as a first-class graph relationship, Cabinet promotes to a node type then — a clean additive refactor with no schema breakage. Until that need arises, the `contained_in` edge type is deferred; no Cabinet or Panel node type exists in the current plans.
 
 **Validation rules:**
 
-- Must appear on a current drawing (at least one `shown_on` edge).
-- Device tag must conform to its declared `tag_convention`.
-- If the Device is on a subsystem chain of any SRS Entry (incoming `implemented_by` edge), it must have at least one incoming `exercises_device` edge from a SAT. (ISO 13849-2:2012.)
+- `device.has_drawing_sheet` — every Device must have at least one `shown_on` edge (ERROR).
+- `device.tag_conforms_to_convention` — Device tag re-parses cleanly under its declared `tag_convention` (ERROR).
+- `graph.unconnected_devices` — Device with zero `wired_to` edges (WARN; engineer-check: hand-cabled and never drawn, spare / future-use, or connectivity missing in drawings).
+- `device.has_verifying_sat` — if the Device is on the subsystem chain of any SRS Entry (incoming `implemented_by` edge), it must have at least one incoming `exercises_device` edge from a SAT (ISO 13849-2:2012). **DEFERRED** — activates when SAT ingestion lands.
 
 ### 2.5 SAT
 
-Each site acceptance test becomes a SAT node. atform is the canonical SAT format and the only render target; hand-written SATs in other formats (legacy Word `.docx`, rendered PDFs from prior projects or other tooling) are ingested for completeness but are expected either to conform to atform's hierarchical numbering and slot in alongside atform-authored tests, or to be converted to atform Python. The SAT parser handles atform Python (`rsd.py`, `mcc.py`, `station_*.py`), Word `.docx`, and text-bearing PDF.
+Each site acceptance test becomes a SAT node. **PDF is the canonical SAT ingest format.** SATs are signed-off legal documents; PDF is the only signable form and the only format that exists in the project's official record (M-Files). Engineers author SATs using whatever tool they prefer — atform (the primary render target), Word, or hand-written — but the deliverable is always a signed PDF. The SAT ingestion parser is PDF-shaped; it does not consume atform Python source as a canonical input.
+
+**Engineer flow for SAT generation and ingestion:** EKG identifies needed SATs from the FMEA chain → generates atform Python source (§7.4) → engineer reviews, hand-edits, and signs off → atform renders to PDF → PDF lands in M-Files → PDF is ingested back through the EKG SAT parser, closing the coverage gap. atform Python is the generator's intermediate output and the engineer's authoring substrate; it is not itself ingested as a canonical artifact.
+
+**EKG ↔ atform integration.** The atform Python AST-walk pattern described below under generation states (states 1–4) is the mechanism by which engineer edits to hand-authored atform modules are incorporated when EKG re-generates a SAT — it is an **authoring loop**, not a primary ingestion path. The ingest path is PDF; the AST walk is a code-generation aid.
 
 **Key:** `numbering_position` — an N-tuple of integers conforming to the project's numbering schema (§2.6). The SAT's atform-rendered ID (`1.1.74.2`, `18.2.146`, etc.) is the dotted form of this tuple. Every SAT carries a stable `numbering_position`; the rendered dotted ID is a presentation projection of it.
 
@@ -431,9 +452,9 @@ The walk-the-slot-declaration pattern is what makes `numbering_position` stable 
 EKG's own source never imports atform — EKG runs without atform installed. The boundary is text-based in both directions:
 
 - **Emission (EKG → atform):** EKG generates `.py` files containing `atform.add_test()` calls as text. atform reads/runs those files as part of its normal operation. Hand-authored modules coexist with EKG-generated modules in the same project.
-- **Ingestion (atform-authored SAT → EKG):** EKG's SAT parser walks the Python AST of existing atform `.py` files (e.g., `rsd.py`, `mcc.py`) and extracts `atform.add_test(...)` calls into the SAT data model. The parser reads source as text; it does not import or execute atform.
+- **Authoring loop (engineer edits → EKG re-generation):** When the engineer hand-edits an atform module, EKG can walk the Python AST of existing `.py` files (e.g., `rsd.py`, `mcc.py`) and extract `atform.add_test(...)` calls to avoid overwriting the engineer's edits during re-generation. This is a code-generation aid, not the SAT ingest path. The canonical ingest path is always the PDF the SAT ultimately renders.
 
-The SAT parser handles three input formats: atform Python (AST walk), Word `.docx` (python-docx), and PDF (text-based extraction with layout-aware structure recovery — covers atform-rendered output, Word-exported SATs, and any text-bearing PDF; scanned image-only PDFs are out of scope without OCR). Parser and emitter are independent — adding a new authoring format adds a parser, and porting to a different SAT renderer adds an emitter; neither changes the schema.
+The emitter and the PDF parser are independent — porting to a different SAT renderer adds a new emitter; the PDF-based ingest path is unchanged.
 
 Project-level configuration in `main.py` stays hand-managed.
 
@@ -511,8 +532,8 @@ Edges are discovered from cross-references in the source documents. Each edge ca
 | `exercises_device` | SAT | Device | SAT equipment list |
 | `addresses` | SAT | FMEA Entry | SAT FMEA reference |
 | `references_srs` | SAT | SRS Entry | SAT SRS reference column (FMEA→SRS is derived via FMEA→Device→SRS, not parsed) |
-| `shown_on` | Device | Drawing Sheet | Drawing enclosure legend |
-| `contained_in` | Device | Cabinet/Panel/Assembly | IEC 81346 hierarchy (+VCS-0102 > -PNL1 > -CB4) |
+| `shown_on` | Device | Drawing Sheet | Drawing outline page references |
+| `contained_in` | Device | Cabinet/Panel/Assembly | **DEFERRED** — current plans expose cabinet/panel as Device properties (`Device.cabinet`, `Device.panel`); Cabinet/Panel are not separate node types. Promote to edge when a future query needs cabinet→device aggregation as a first-class graph relationship. |
 | `wired_to` | Device | Device | Schematic wire tags between device terminals |
 | `cabled_to` | Device | Device | Schematic cable tags between devices (often spanning cabinets) |
 | `reads_tag` | Routine/FB/POU | Tag (shared entity) | PLC project tag cross-references |
@@ -596,6 +617,8 @@ When two artifacts reference each other from opposite directions, the references
 
 Either-side-only references produce findings. The engineer resolves by adding the missing reference on whichever side, or by removing the reference on the side that had it incorrectly. ISO 13849-1:2015 §4 requires risk-reduction allocation to be traceable from hazard to safety function; the reciprocity check is the project-convention mechanism that makes that traceability mechanically verifiable across the two source artifacts (HA worksheet and SRS document).
 
+**SIF chain verification (deferred).** A deeper cross-document reciprocity check — verifying that the SRS Entry's §3 narrative description of a safety instrumented function's sensor-logic-final-element chain matches the actual topology in the `wired_to` graph — is a future rule. It requires NLP on the SRS narrative to extract a structured chain spec, then a graph walk to verify the topology. Standards anchor: ISO 13849-1:2015 §6 (architectural validation) + IEC 61508-2 (E/E/PE architecture verification). This rule becomes available once Device nodes and `wired_to` edges land in the graph, but the NLP extraction piece is a separate plan.
+
 ## 5. Storage
 
 ### 5.1 Requirements
@@ -648,7 +671,7 @@ Each document type has its own parser. The parser reads the document, produces a
 
   *Cross-reference resolution.* Schematic pages cross-reference tags across pages and cabinets. EPLAN uses notation like "-24V_FU04 / &24VDC MULTILINE/607.1"; AutoCAD Electrical uses page-zone notation in a different syntax (e.g., "from 12-25"). Cross-reference notation is parsing input, not graph structure — it tells the parser that a tag continues elsewhere; the resolved tag is what becomes the edge identity.
 
-  *Device hierarchy (when prefix-encoded).* When device tags use IEC 81346 prefix encoding (e.g., +VCS-0102 contains -PNL1 contains -CB4), the parser emits `contained_in` edges from the prefix structure. Tags without prefix encoding (NFPA, ISA 5.1) don't carry hierarchy in the tag string; for those projects, hierarchy is either absent or derived from a separate panel-layout sheet.
+  *Device hierarchy (when prefix-encoded).* When device tags use IEC 81346 prefix encoding (e.g., `=1620F++RS12+VSD-0101-PNL1-Q1`), the parser extracts the `=`, `++`, `+`, and `-` aspect components and stores them as separate properties on the Device node (`building`, `function`, `cabinet`, `panel`). Cabinet-level grouping is done via property predicates. `contained_in` edges and Cabinet/Panel node types are deferred (see §3.1); if a future rule needs cabinet→device traversal, Cabinet promotes to a node type as an additive refactor. Tags without prefix encoding (NFPA, ISA 5.1) don't carry hierarchy in the tag string; for those projects, the cabinet property is derived from the sheet's panel assignment when available.
 
 - **PLC project parser.** PLC projects from Rockwell, Siemens, and Beckhoff contain program structure, tag definitions, I/O mappings, and safety program partitions in parseable formats. Each platform has its own export format:
 
@@ -666,19 +689,17 @@ Each document type has its own parser. The parser reads the document, produces a
 
   *Safety program partition.* The safety task (Rockwell), F-program (Siemens), or TwinSAFE configuration (Beckhoff) is where the SRS safety functions are implemented. The parser identifies which function blocks or routines implement which safety functions, creating `implemented_by` edges from SRS nodes through to specific code elements. This is the logical layer's contribution to the end-to-end traversal from hazard to verification.
 
-- **SAT parser.** Handles three input formats — atform Python, Word `.docx`, and text-bearing PDF — and produces SAT nodes with the data model from §2.5 plus the edges (`addresses`, `references_srs`, `exercises_device`, `exercises_tag`, `depends_on_test`).
+- **SAT parser.** Handles PDF as its canonical input format (the only signed, legally-archivable form — see §2.5). Produces SAT nodes with the data model from §2.5 plus the edges (`addresses`, `references_srs`, `exercises_device`, `exercises_tag`, `depends_on_test`).
 
-  *atform Python (AST walk).* The parser walks the AST of each module (`mcc.py`, `rsd.py`, etc.) in source order, simulating atform's section / test / skip counters: tracks `set_id_depth(N)` from `main.py`, opens or jumps sections on each `section(level, id=, ...)` call, increments the deepest-level counter on `add_test(...)` and `skip_test()` calls. Each `add_test` call yields a SAT node with its `numbering_position` set to the current (level_1, level_2, …, level_N) tuple. The parser does not import or execute atform — it reads the source as text via `ast`. SAT-authored fields (title, induced_fault, preconditions, hmi_message, test_cases) are extracted from the `add_test` call arguments; computed fields are joined from upstream nodes at validation time.
+  *PDF (layout-aware text extraction).* Reads atform-rendered output, Word-exported SATs, and any text-bearing PDF. Recovers `numbering_position` from the rendered title block and procedure steps from the body. Scanned image-only PDFs are out of scope without OCR. This is the primary ingestion path for all SATs regardless of how they were authored.
 
-  *Word `.docx` (python-docx).* Reads headings and structured sections to recover the SAT's `numbering_position` (declared in the title or a header field) and the SAT-authored fields (procedure steps, references, expected behavior). Less structured than atform Python; parser may need per-template hints when heading conventions vary.
-
-  *PDF (layout-aware text extraction).* Reads atform-rendered output, Word-exported SATs, and any text-bearing PDF. Recovers `numbering_position` from the rendered title block and procedure steps from the body. Scanned image-only PDFs are out of scope without OCR. Useful for ingesting legacy SATs where source isn't recoverable.
-
-  Across all three formats, the parser validates the ingested `numbering_position` against the project numbering schema (§2.6) — schema-conformance findings are produced when the position doesn't compose against a declared binding.
+  The parser validates the ingested `numbering_position` against the project numbering schema (§2.6) — schema-conformance findings are produced when the position doesn't compose against a declared binding. This check applies uniformly to atform-rendered, Word-exported, and hand-written PDFs; authoring tool is irrelevant to schema conformance.
 
 ### 6.3 Re-ingestion and Diff
 
 When a revised document is committed, the parser runs again on that document and produces a new set of graph fragments. The ingestion pipeline computes the diff against the previous graph state: nodes added, nodes removed, edges added, edges removed, properties changed. The diff triggers re-evaluation of validation rules on all affected nodes. New findings are the set of nodes or edges that now fail validation where they previously passed, or traversal paths that are now blocked where they previously completed.
+
+**Drawing revisions are first-class.** Per IEC 81346 convention, Device identity is revision-stable — cross-document edges (FMEA → Device, SRS → Device) survive across drawing revisions automatically because they key on the Device's tag, not on the DrawingSheet's logical-page key (which can shift when EPLAN renumbers pages within an aspect). Re-ingest of a new drawing revision drops every node and edge whose Provenance.source matches the file path, then re-parses; the revision-diff finding set surfaces sheets added, removed, or renumbered, devices added or removed, and references reconnected. The revision-diff itself is a powerful change-management deliverable — IEC 61508-1 §6.1.4 requires controlled change management on safety systems, and the EKG can claim this coverage machine-checkably, producing an auditable record of exactly what changed between drawing revisions.
 
 ## 7. Outputs
 
@@ -801,15 +822,17 @@ EKG exposes its graph operations as an MCP (Model Context Protocol) server. This
 
 ### 8.2 Clients
 
-LanceLLMot connects to the EKG MCP server as the primary UI and chat interface. Parsival and merLLM can also connect to the same MCP server for ops dashboard integration and system control queries.
+havelock hosts the MCP server as part of the hexcaliper ecosystem's inter-app fabric. LanceLLMot, parsival, and merLLM connect to the EKG MCP server as clients when they need to surface EKG data — lancellmot for cross-project document context and chat, parsival for ops dashboard integration, merLLM for system control queries. None of them host or own the EKG graph; havelock is the authoritative EKG process.
 
 ## 9. UI Architecture
 
-The EKG UI is a component within LanceLLMot, scoped to a project.
+havelock is the EKG app — a standalone application in the hexcaliper ecosystem alongside lancellmot, parsival, merLLM, and soonstone. The EKG UI is havelock's own interface, not a component within another app.
+
+In v0–v1, havelock is a CLI tool. The web UI is the end-state, following the same patterns as the other hexcaliper apps (Flask, structured JSON logging, per-app dashboard). Parser, store, engine, rule packs, and projections are all CLI-agnostic by design — they work equally from a CLI loop or a Flask request handler.
 
 ### 9.1 Document Upload
 
-LanceLLMot already handles document uploads. A tag at upload time routes the document: "EKG resource" sends it to the graph ingestion pipeline, "LLM resource" sends it to the chunker for chat context. The rest of the upload flow is unchanged.
+Document upload is a havelock concern. At upload time, the engineer identifies the document type (HA, SRS, FMEA, drawings, SAT, etc.), which routes to the appropriate parser. In the CLI era, this routing uses filename tokens (§6.2). In the web UI, the same routing can be complemented or replaced by an explicit type selector at upload — the underlying parser receives a path and does not care which routing mechanism delivered it.
 
 ### 9.2 Project EKG Interface
 
@@ -827,6 +850,8 @@ Every tab is a projection of the graph filtered by node type. Every cross-refere
 
 ### 9.3 Chat Interface
 
-The chat sits alongside the tabbed interface. The engineer can ask questions that the tabs don't answer directly: "what's uncovered for VCS SRS 1.1," "what would break if I relocated this device," "which FMEA entries share the same SAT." Queries go through the MCP server and results come back in the chat.
+The chat sits alongside the tabbed interface within havelock. The engineer can ask questions that the tabs don't answer directly: "what's uncovered for VCS SRS 1.1," "what would break if I relocated this device," "which FMEA entries share the same SAT." Queries go through the MCP server and results come back in the chat.
 
 The chat is a research tool, not an authoring tool. It helps engineers gather information from the graph to support their work, including SAT writing, but it does not modify the graph directly. SATs are authored through atform or by hand, committed to the repo, ingested by the parser, and then present in the graph. The chat accelerates the engineer's workflow without bypassing the ingestion pipeline.
+
+Other hexcaliper apps (lancellmot, parsival, merLLM) can surface EKG data through the MCP server as clients when their own workflows benefit from cross-referencing engineering knowledge graph state — for example, lancellmot incorporating EKG findings as document context, or parsival linking project-management items to open coverage gaps.
